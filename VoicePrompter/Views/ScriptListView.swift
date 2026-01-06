@@ -28,7 +28,27 @@ struct ScriptListView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if filteredScripts.isEmpty {
+                if scripts.isEmpty {
+                    List {
+                        NavigationLink {
+                            ScriptEditorView(script: .demo)
+                        } label: {
+                            ScriptDemoRowView(script: .demo)
+                        }
+                    }
+                    .frame(maxHeight: 150.0)
+
+                    ContentUnavailableView(
+                        "No Scripts",
+                        systemImage: "doc.text",
+                        description: Text(searchText.isEmpty ? "Tap + to create your first script\nOr try the demo script" : "No scripts match your search")
+                    )
+                    .frame(maxHeight: 200.0)
+                    
+                    Spacer()
+                    
+                    
+                } else if filteredScripts.isEmpty {
                     ContentUnavailableView(
                         "No Scripts",
                         systemImage: "doc.text",
@@ -82,6 +102,55 @@ struct ScriptRowView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(script.title)
                 .font(.headline)
+            
+            HStack {
+                Label("\(script.wordCount) words", systemImage: "doc.text")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                
+                Spacer()
+                
+                Text(formatDuration(script.estimatedDuration))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+    
+    private func formatDuration(_ duration: TimeInterval) -> String {
+        let minutes = Int(duration) / 60
+        let seconds = Int(duration) % 60
+        if minutes > 0 {
+            return "\(minutes)m \(seconds)s"
+        }
+        return "\(seconds)s"
+    }
+}
+
+struct ScriptDemoRowView: View {
+    let script: Script
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(script.title)
+                    .font(.headline)
+                
+                Spacer()
+                
+                Text("DEMO")
+                    .font(.caption2.bold())
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.blue.opacity(0.1))
+                    .foregroundColor(.blue)
+                    .clipShape(Capsule())
+                    .overlay(
+                        Capsule()
+                            .stroke(Color.blue.opacity(0.2), lineWidth: 1)
+                    )
+            }
             
             HStack {
                 Label("\(script.wordCount) words", systemImage: "doc.text")
