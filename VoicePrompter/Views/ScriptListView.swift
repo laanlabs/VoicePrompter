@@ -28,7 +28,27 @@ struct ScriptListView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if filteredScripts.isEmpty {
+                if scripts.isEmpty {
+                    List {
+                        NavigationLink {
+                            ScriptEditorView(script: .demo)
+                        } label: {
+                            ScriptRowView(script: .demo)
+                        }
+                    }
+                    .frame(maxHeight: 150.0)
+
+                    ContentUnavailableView(
+                        "No Scripts",
+                        systemImage: "doc.text",
+                        description: Text(searchText.isEmpty ? "Tap + to create your first script\nOr try the demo script" : "No scripts match your search")
+                    )
+                    .frame(maxHeight: 200.0)
+                    
+                    Spacer()
+                    
+                    
+                } else if filteredScripts.isEmpty {
                     ContentUnavailableView(
                         "No Scripts",
                         systemImage: "doc.text",
@@ -80,8 +100,26 @@ struct ScriptRowView: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(script.title)
-                .font(.headline)
+            HStack {
+                Text(script.title)
+                    .font(.headline)
+                
+                if script.isDemo {
+                    Spacer()
+                    
+                    Text("DEMO")
+                        .font(.caption2.bold())
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.blue.opacity(0.1))
+                        .foregroundColor(.blue)
+                        .clipShape(Capsule())
+                        .overlay(
+                            Capsule()
+                                .stroke(Color.blue.opacity(0.2), lineWidth: 1)
+                        )
+                }
+            }
             
             HStack {
                 Label("\(script.wordCount) words", systemImage: "doc.text")
