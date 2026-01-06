@@ -14,6 +14,8 @@ extension Script {
 
         Now we are engaged in a great civil war, testing whether that nation, or any nation so conceived and so dedicated, can long endure.
         """
-        return Script(title: "Gettysburg Address (Demo)", content: content)
+        let script = Script(title: "Gettysburg Address (Demo)", content: content)
+        script.isDemo = true
+        return script
     }
 }

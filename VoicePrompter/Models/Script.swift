@@ -16,6 +16,8 @@ final class Script {
     var createdAt: Date
     var updatedAt: Date
     
+    @Transient var isDemo: Bool = false
+    
     init(title: String = "Untitled Script", content: String = "") {
         self.id = UUID()
         self.title = title
