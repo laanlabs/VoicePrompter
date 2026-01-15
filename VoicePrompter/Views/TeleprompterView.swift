@@ -23,6 +23,7 @@ struct TeleprompterView: View {
     @State private var loadingStatusText = ""
     @State private var downloadProgress: Double = 0.0
     @State private var isDownloading: Bool = false
+    @State private var showDownloadConfirmation = false
     
     private var scriptWords: [String] {
         MarkdownParser.tokenize(MarkdownParser.extractPlainText(from: script.content))
@@ -299,9 +300,26 @@ struct TeleprompterView: View {
         .sheet(isPresented: $showingSettings) {
             SettingsView()
         }
+        .alert("Download Required", isPresented: $showDownloadConfirmation) {
+            Button("Download") {
+                beginVoiceTrack()
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("VoiceTrack requires a one-time download of the speech recognition model (\(WhisperService.estimatedDownloadSize)). This enables automatic script scrolling based on your voice.\n\nThe download will only happen once and requires an internet connection.")
+        }
     }
     
     private func startVoiceTrack() {
+        // Check if model needs to be downloaded first
+        if voiceTrack.whisperService.needsDownload() {
+            showDownloadConfirmation = true
+        } else {
+            beginVoiceTrack()
+        }
+    }
+
+    private func beginVoiceTrack() {
         Task {
             do {
                 startTime = Date()

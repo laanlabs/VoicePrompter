@@ -8,10 +8,13 @@
 
 /* Begin PBXBuildFile section */
 		7F5E619C2EF8524E00AF0266 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = 7F5E619B2EF8524E00AF0266 /* WhisperKit */; };
+		7FCF91EA2F0F3BD5003524EB /* MT.gpx in Sources */ = {isa = PBXBuildFile; fileRef = 7FCF91E92F0F3BD2003524EB /* MT.gpx */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		7F5E61182EF84E4200AF0266 /* VoicePrompter.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = VoicePrompter.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		7FCF91E92F0F3BD2003524EB /* MT.gpx */ = {isa = PBXFileReference; lastKnownFileType = text; path = MT.gpx; sourceTree = "<group>"; };
+		7FCF91EB2F0F3C01003524EB /* MT.gpx */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = MT.gpx; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -37,8 +40,10 @@
 		7F5E610F2EF84E4200AF0266 = {
 			isa = PBXGroup;
 			children = (
+				7FCF91EB2F0F3C01003524EB /* MT.gpx */,
 				7F5E611A2EF84E4200AF0266 /* VoicePrompter */,
 				7F5E61192EF84E4200AF0266 /* Products */,
+				7FCF91E92F0F3BD2003524EB /* MT.gpx */,
 			);
 			sourceTree = "<group>";
 		};
@@ -128,6 +133,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				7FCF91EA2F0F3BD5003524EB /* MT.gpx in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

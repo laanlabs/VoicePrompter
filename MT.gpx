@@ -1,7 +1,11 @@
-//
-//  Untitled.swift
-//  VoicePrompter
-//
-//  Created by jclaan on 1/7/26.
-//
-
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Xcode">
+    <trk>
+        <name>Bozeman Downtown</name>
+        <trkseg>
+            <trkpt lat="45.676998" lon="-111.042931"></trkpt>
+            <trkpt lat="45.677800" lon="-111.041800"></trkpt>
+            <trkpt lat="45.678600" lon="-111.040600"></trkpt>
+        </trkseg>
+    </trk>
+</gpx>

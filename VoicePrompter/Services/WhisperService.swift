@@ -41,11 +41,11 @@ class WhisperService: ObservableObject {
     private func checkModelCache() -> (exists: Bool, fileCount: Int, path: String) {
         let fileManager = FileManager.default
         let path = modelPath.path
-        
+
         guard fileManager.fileExists(atPath: path) else {
             return (false, 0, path)
         }
-        
+
         do {
             let contents = try fileManager.contentsOfDirectory(atPath: path)
             // Filter to only count actual model files (not hidden files)
@@ -55,6 +55,16 @@ class WhisperService: ObservableObject {
             return (false, 0, path)
         }
     }
+
+    /// Public method to check if download will be required (for pre-download prompt)
+    func needsDownload() -> Bool {
+        let cacheStatus = checkModelCache()
+        // Model is considered cached if it exists with at least 5 files
+        return !(cacheStatus.exists && cacheStatus.fileCount >= 5)
+    }
+
+    /// Estimated download size for user disclosure
+    static let estimatedDownloadSize = "~150 MB"
     
     func loadModel() async throws {
         guard !isModelLoaded else { return }
