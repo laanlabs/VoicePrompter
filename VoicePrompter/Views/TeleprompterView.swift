@@ -24,7 +24,9 @@ struct TeleprompterView: View {
     @State private var downloadProgress: Double = 0.0
     @State private var isDownloading: Bool = false
     @State private var showDownloadConfirmation = false
-    
+    @State private var showErrorState = false
+    @State private var canRetryDownload = false
+
     private var scriptWords: [String] {
         MarkdownParser.tokenize(MarkdownParser.extractPlainText(from: script.content))
     }
@@ -277,7 +279,12 @@ struct TeleprompterView: View {
                     LoadingOverlayView(
                         status: loadingStatusText,
                         progress: downloadProgress,
-                        isDownloading: isDownloading
+                        isDownloading: isDownloading,
+                        showError: showErrorState,
+                        canRetry: canRetryDownload,
+                        onRetry: {
+                            retryDownload()
+                        }
                     )
                 }
             }
@@ -293,6 +300,12 @@ struct TeleprompterView: View {
         }
         .onReceive(voiceTrack.whisperService.$isDownloading) { downloading in
             isDownloading = downloading
+        }
+        .onReceive(voiceTrack.whisperService.$errorMessage) { error in
+            showErrorState = error != nil
+        }
+        .onReceive(voiceTrack.whisperService.$canRetry) { retry in
+            canRetryDownload = retry
         }
         .onDisappear {
             stopVoiceTrack()
@@ -322,6 +335,8 @@ struct TeleprompterView: View {
     private func beginVoiceTrack() {
         Task {
             do {
+                showErrorState = false
+                canRetryDownload = false
                 startTime = Date()
                 elapsedTime = 0
                 startTimer()
@@ -329,8 +344,16 @@ struct TeleprompterView: View {
                 isVoiceTrackActive = true
             } catch {
                 print("Failed to start VoiceTrack: \(error)")
+                // Error state will be set by onReceive handlers
             }
         }
+    }
+
+    private func retryDownload() {
+        voiceTrack.whisperService.resetForRetry()
+        showErrorState = false
+        canRetryDownload = false
+        beginVoiceTrack()
     }
     
     private func stopVoiceTrack() {
@@ -420,10 +443,16 @@ struct LoadingOverlayView: View {
     let status: String
     let progress: Double
     let isDownloading: Bool
+    let showError: Bool
+    let canRetry: Bool
+    let onRetry: () -> Void
+
     @State private var dots = ""
-    
+
     private var title: String {
-        if isDownloading {
+        if showError {
+            return "Download Failed"
+        } else if isDownloading {
             return "Downloading Model"
         } else if status.lowercased().contains("check") {
             return "Checking for Model"
@@ -431,13 +460,17 @@ struct LoadingOverlayView: View {
             return "Loading from Cache"
         } else if status.lowercased().contains("warm") {
             return "Preparing Model"
+        } else if status.lowercased().contains("retry") {
+            return "Retrying Download"
         } else {
             return "Loading Speech Model"
         }
     }
-    
+
     private var subtitle: String {
-        if isDownloading {
+        if showError && canRetry {
+            return "This is usually a temporary server issue"
+        } else if isDownloading {
             return "First-time setup (~150MB)"
         } else if status.lowercased().contains("cache") {
             return "Using previously downloaded model"
@@ -445,28 +478,34 @@ struct LoadingOverlayView: View {
             return ""
         }
     }
-    
+
     var body: some View {
         ZStack {
             Color.black.opacity(0.85)
                 .ignoresSafeArea()
-            
+
             VStack(spacing: 20) {
+                // Error state indicator
+                if showError {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 50))
+                        .foregroundColor(.orange)
+                }
                 // Animated spinner or progress indicator
-                if isDownloading {
+                else if isDownloading {
                     // Show progress ring when downloading
                     ZStack {
                         Circle()
                             .stroke(Color.white.opacity(0.2), lineWidth: 8)
                             .frame(width: 80, height: 80)
-                        
+
                         Circle()
                             .trim(from: 0, to: progress)
                             .stroke(Color.green, style: StrokeStyle(lineWidth: 8, lineCap: .round))
                             .frame(width: 80, height: 80)
                             .rotationEffect(.degrees(-90))
                             .animation(.easeInOut(duration: 0.3), value: progress)
-                        
+
                         Text("\(Int(progress * 100))%")
                             .font(.headline.bold())
                             .foregroundColor(.white)
@@ -477,33 +516,51 @@ struct LoadingOverlayView: View {
                         .progressViewStyle(CircularProgressViewStyle(tint: .white))
                         .scaleEffect(2.5)
                 }
-                
+
                 Text(title)
                     .font(.title2.bold())
-                    .foregroundColor(.white)
-                
+                    .foregroundColor(showError ? .orange : .white)
+
                 // Actual status message from WhisperService
                 Text(status.isEmpty ? "Initializing\(dots)" : status)
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.8))
                     .multilineTextAlignment(.center)
                     .frame(minHeight: 20)
-                
+                    .padding(.horizontal)
+
                 // Subtitle info
                 if !subtitle.isEmpty {
                     Text(subtitle)
                         .font(.caption)
-                        .foregroundColor(.green.opacity(0.8))
+                        .foregroundColor(showError ? .white.opacity(0.6) : .green.opacity(0.8))
                 }
-                
+
+                // Retry button when error occurs
+                if showError && canRetry {
+                    Button(action: onRetry) {
+                        HStack {
+                            Image(systemName: "arrow.clockwise")
+                            Text("Try Again")
+                        }
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 12)
+                        .background(Color.blue)
+                        .cornerRadius(10)
+                    }
+                    .padding(.top, 8)
+                }
+
                 // Progress bar for download
-                if isDownloading {
+                if isDownloading && !showError {
                     VStack(spacing: 8) {
                         GeometryReader { geometry in
                             ZStack(alignment: .leading) {
                                 RoundedRectangle(cornerRadius: 4)
                                     .fill(Color.white.opacity(0.2))
-                                
+
                                 RoundedRectangle(cornerRadius: 4)
                                     .fill(Color.green)
                                     .frame(width: geometry.size.width * progress)
@@ -512,12 +569,12 @@ struct LoadingOverlayView: View {
                         }
                         .frame(height: 8)
                         .padding(.horizontal, 20)
-                        
+
                         Text("~150MB (one-time download)")
                             .font(.caption)
                             .foregroundColor(.white.opacity(0.5))
                     }
-                } else if status.lowercased().contains("cache") {
+                } else if status.lowercased().contains("cache") && !showError {
                     Text("Using cached model - no download needed")
                         .font(.caption)
                         .foregroundColor(.green.opacity(0.7))
@@ -531,7 +588,7 @@ struct LoadingOverlayView: View {
             startDotsAnimation()
         }
     }
-    
+
     private func startDotsAnimation() {
         // Animate dots for visual feedback
         Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { timer in

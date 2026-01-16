@@ -17,9 +17,14 @@ class WhisperService: ObservableObject {
     @Published var downloadProgress: Double = 0.0
     @Published var isDownloading: Bool = false
     @Published var errorMessage: String?
-    
+    @Published var canRetry: Bool = false
+
     private var whisperKit: WhisperKit?
     private let modelName = "openai_whisper-small.en"
+
+    // Retry configuration
+    private let maxRetries = 3
+    private let baseRetryDelay: UInt64 = 2_000_000_000 // 2 seconds in nanoseconds
     
     // Silence threshold - lower to be more sensitive
     private let silenceThreshold: Float = 0.0005
@@ -129,19 +134,66 @@ class WhisperService: ObservableObject {
         } catch {
             isLoading = false
             isDownloading = false
-            errorMessage = error.localizedDescription
-            loadingStatus = "Error: \(error.localizedDescription)"
+
+            // Provide user-friendly error message
+            let userMessage: String
+            if let whisperError = error as? WhisperError {
+                userMessage = whisperError.errorDescription ?? error.localizedDescription
+                canRetry = whisperError.isRetryable
+            } else {
+                let categorized = categorizeError(error)
+                userMessage = categorized.errorDescription ?? error.localizedDescription
+                canRetry = categorized.isRetryable
+            }
+
+            errorMessage = userMessage
+            loadingStatus = "Error: \(userMessage)"
             print("❌ Failed to load model: \(error)")
             throw error
         }
     }
     
     private func downloadModel() async throws {
+        var lastError: Error?
+
+        for attempt in 1...maxRetries {
+            do {
+                try await attemptDownload(attempt: attempt)
+                return // Success - exit the retry loop
+            } catch {
+                lastError = error
+                let whisperError = categorizeError(error)
+
+                if whisperError.isRetryable && attempt < maxRetries {
+                    let delay = baseRetryDelay * UInt64(attempt) // Exponential backoff
+                    let delaySecs = Double(delay) / 1_000_000_000
+                    loadingStatus = "Connection issue, retrying in \(Int(delaySecs))s... (attempt \(attempt)/\(maxRetries))"
+                    print("⚠️ Attempt \(attempt) failed: \(error.localizedDescription). Retrying in \(delaySecs)s...")
+                    try? await Task.sleep(nanoseconds: delay)
+                } else {
+                    // Not retryable or last attempt - throw the error
+                    throw whisperError
+                }
+            }
+        }
+
+        // If we get here, all retries failed
+        if let error = lastError {
+            throw categorizeError(error)
+        }
+    }
+
+    private func attemptDownload(attempt: Int) async throws {
         isDownloading = true
         downloadProgress = 0.0
-        loadingStatus = "Downloading speech model (~150MB)..."
-        print("📥 Starting model download...")
-        
+
+        if attempt > 1 {
+            loadingStatus = "Retrying download (attempt \(attempt)/\(maxRetries))..."
+        } else {
+            loadingStatus = "Downloading speech model (~150MB)..."
+        }
+        print("📥 Starting model download (attempt \(attempt))...")
+
         // Start a task to show progress animation
         let progressTask = Task { @MainActor in
             var progress = 0.0
@@ -150,10 +202,18 @@ class WhisperService: ObservableObject {
                 progress += 0.03
                 self.downloadProgress = min(progress, 0.90)
                 let percent = Int(self.downloadProgress * 100)
-                self.loadingStatus = "Downloading speech model... \(percent)%"
+                if attempt > 1 {
+                    self.loadingStatus = "Downloading (attempt \(attempt))... \(percent)%"
+                } else {
+                    self.loadingStatus = "Downloading speech model... \(percent)%"
+                }
             }
         }
-        
+
+        defer {
+            progressTask.cancel()
+        }
+
         let whisper = try await WhisperKit(
             model: modelName,
             verbose: true,  // Enable verbose to see download progress in console
@@ -162,16 +222,48 @@ class WhisperService: ObservableObject {
             load: true,
             download: true
         )
-        
-        progressTask.cancel()
+
         isDownloading = false
         downloadProgress = 1.0
         loadingStatus = "Download complete!"
         whisperKit = whisper
-        
+
         // Verify the download
         let newCacheStatus = checkModelCache()
         print("✅ Model downloaded and cached: \(newCacheStatus.fileCount) files at \(newCacheStatus.path)")
+    }
+
+    /// Categorize errors to determine if they're retryable and provide better messages
+    private func categorizeError(_ error: Error) -> WhisperError {
+        let description = error.localizedDescription.lowercased()
+
+        // Check for timeout errors
+        if description.contains("504") || description.contains("timeout") || description.contains("timed out") {
+            return .networkTimeout
+        }
+
+        // Check for server errors (5xx)
+        if description.contains("502") || description.contains("bad gateway") {
+            return .serverError(statusCode: 502)
+        }
+        if description.contains("503") || description.contains("service unavailable") {
+            return .serverError(statusCode: 503)
+        }
+        if description.contains("500") || description.contains("internal server error") {
+            return .serverError(statusCode: 500)
+        }
+
+        // For other errors, wrap them
+        return .downloadFailed(underlying: error)
+    }
+
+    /// Reset error state and allow retry
+    func resetForRetry() {
+        errorMessage = nil
+        canRetry = false
+        loadingStatus = ""
+        downloadProgress = 0.0
+        isDownloading = false
     }
     
     func transcribe(_ audioData: Data) async throws -> String? {
@@ -245,7 +337,38 @@ class WhisperService: ObservableObject {
     }
 }
 
-enum WhisperError: Error {
+enum WhisperError: Error, LocalizedError {
     case modelNotLoaded
     case transcriptionFailed
+    case networkTimeout
+    case serverError(statusCode: Int)
+    case downloadFailed(underlying: Error)
+
+    var errorDescription: String? {
+        switch self {
+        case .modelNotLoaded:
+            return "Speech model not loaded"
+        case .transcriptionFailed:
+            return "Transcription failed"
+        case .networkTimeout:
+            return "Network timeout - please check your connection and try again"
+        case .serverError(let code):
+            return "Server error (\(code)) - this is usually temporary, please try again"
+        case .downloadFailed(let error):
+            return "Download failed: \(error.localizedDescription)"
+        }
+    }
+
+    var isRetryable: Bool {
+        switch self {
+        case .networkTimeout, .serverError:
+            return true
+        case .downloadFailed(let error):
+            // Check if underlying error suggests retry
+            let desc = error.localizedDescription.lowercased()
+            return desc.contains("timeout") || desc.contains("504") || desc.contains("502") || desc.contains("503")
+        default:
+            return false
+        }
+    }
 }
