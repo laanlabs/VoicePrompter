@@ -43,15 +43,35 @@ struct SettingsView: View {
                             Text(mode.rawValue).tag(mode)
                         }
                     }
-                    
+
                     if settings.scrollMode == .fixedSpeed {
                         VStack(alignment: .leading) {
                             Text("Scroll Speed: \(String(format: "%.1f", settings.fixedScrollSpeed)) lines/sec")
                             Slider(value: $settings.fixedScrollSpeed, in: 0.5...5.0, step: 0.1)
                         }
                     }
-                    
+
                     Toggle("Show Mic Level", isOn: $settings.showMicLevel)
+                }
+
+                Section("Microphone") {
+                    VStack(alignment: .leading) {
+                        HStack {
+                            Text("Mic Boost")
+                            Spacer()
+                            Text("\(String(format: "%.1f", settings.micBoost))x")
+                                .foregroundColor(.secondary)
+                        }
+                        Slider(value: $settings.micBoost, in: 1.0...4.0, step: 0.5)
+                        Text("Increase for distant speaking. May introduce noise at high levels.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    Toggle("Voice Isolation", isOn: $settings.voiceIsolation)
+                    Text("Reduces background noise and focuses on speech. Requires restart of VoiceTrack.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
                 
                 Section("About") {

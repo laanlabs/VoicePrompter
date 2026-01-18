@@ -41,9 +41,9 @@ struct TeleprompterView: View {
                 // Content with word highlighting - scrollable with per-word IDs
                 ScrollViewReader { proxy in
                     ScrollView {
-                        // Spacer at top to allow first words to scroll to center
+                        // Spacer at top to allow first words to scroll to tracking position (35% from top)
                         Spacer()
-                            .frame(height: geometry.size.height / 2)
+                            .frame(height: geometry.size.height * 0.35)
                         
                         // Word flow layout with individual IDs for scrolling
                         WordFlowView(
@@ -57,22 +57,22 @@ struct TeleprompterView: View {
                         .padding(.horizontal, settings.horizontalMargin)
                         .scaleEffect(x: settings.mirrorMode ? -1 : 1)
                         
-                        // Spacer at bottom to allow last words to scroll to center
+                        // Spacer at bottom to allow last words to scroll to tracking position
                         Spacer()
-                            .frame(height: geometry.size.height / 2)
+                            .frame(height: geometry.size.height * 0.65)
                     }
                     .onChange(of: voiceTrack.currentWordIndex) { _, newIndex in
                         withAnimation(.easeInOut(duration: 0.3)) {
-                            proxy.scrollTo("word-\(newIndex)", anchor: .center)
+                            proxy.scrollTo("word-\(newIndex)", anchor: UnitPoint(x: 0.5, y: 0.35))
                         }
                     }
                 }
-                
-                // Center line indicator
+
+                // Tracking line indicator (35% from top)
                 Rectangle()
                     .fill(Color.white.opacity(0.1))
                     .frame(height: 2)
-                    .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
+                    .position(x: geometry.size.width / 2, y: geometry.size.height * 0.35)
                 
                 // Overlay controls
                 VStack {
@@ -250,8 +250,15 @@ struct TeleprompterView: View {
                                 .frame(height: 4)
                                 .padding(.horizontal)
                         }
-                        
-                        // VoiceTrack toggle
+                    }
+                    .padding(.bottom)
+                }
+
+                // Small VoiceTrack toggle in lower right corner
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
                         Button {
                             if isVoiceTrackActive {
                                 stopVoiceTrack()
@@ -259,19 +266,16 @@ struct TeleprompterView: View {
                                 startVoiceTrack()
                             }
                         } label: {
-                            HStack {
-                                Image(systemName: isVoiceTrackActive ? "pause.circle.fill" : "play.circle.fill")
-                                Text(isVoiceTrackActive ? "Pause VoiceTrack" : "Start VoiceTrack")
-                            }
-                            .font(.headline)
-                            .foregroundColor(.white)
-                            .padding()
-                            .background(isVoiceTrackActive ? Color.red.opacity(0.8) : Color.green.opacity(0.8))
-                            .cornerRadius(12)
+                            Image(systemName: isVoiceTrackActive ? "stop.fill" : "play.fill")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.white)
+                                .frame(width: 44, height: 44)
+                                .background(isVoiceTrackActive ? Color.red.opacity(0.8) : Color.green.opacity(0.8))
+                                .clipShape(Circle())
                         }
-                        .padding(.horizontal)
+                        .padding(.trailing, 20)
+                        .padding(.bottom, 30)
                     }
-                    .padding(.bottom)
                 }
                 
                 // Loading overlay
@@ -340,6 +344,13 @@ struct TeleprompterView: View {
                 startTime = Date()
                 elapsedTime = 0
                 startTimer()
+
+                // Configure audio settings before starting
+                voiceTrack.configureAudio(
+                    micBoost: Float(settings.micBoost),
+                    voiceIsolation: settings.voiceIsolation
+                )
+
                 try await voiceTrack.start()
                 isVoiceTrackActive = true
             } catch {

@@ -25,6 +25,8 @@ class AppSettings: ObservableObject {
     @AppStorage("scrollMode") var scrollModeRaw: String = ScrollMode.voiceTrack.rawValue
     @AppStorage("fixedScrollSpeed") var fixedScrollSpeed: Double = 2.0
     @AppStorage("showMicLevel") var showMicLevel: Bool = true
+    @AppStorage("micBoost") var micBoost: Double = 1.0  // 1.0 to 4.0x gain
+    @AppStorage("voiceIsolation") var voiceIsolation: Bool = false
     
     var textColor: Color {
         get {

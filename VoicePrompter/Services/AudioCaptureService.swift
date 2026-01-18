@@ -12,17 +12,32 @@ class AudioCaptureService: NSObject {
     private var audioEngine: AVAudioEngine?
     private var inputNode: AVAudioInputNode?
     private var isCapturing = false
-    
+
     var onAudioBuffer: ((Data) -> Void)?
     var onMicLevel: ((Float) -> Void)?
+
+    // Audio enhancement settings
+    var micBoost: Float = 1.0  // Gain multiplier (1.0 to 4.0)
+    var voiceIsolation: Bool = false
     
     func start() throws {
         guard !isCapturing else { return }
-        
+
         // Request microphone permission
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.record, mode: .measurement, options: [])
+
+        // Use voiceChat mode for voice isolation (includes noise reduction)
+        // or measurement mode for raw audio
+        let audioMode: AVAudioSession.Mode = voiceIsolation ? .voiceChat : .measurement
+        try session.setCategory(.playAndRecord, mode: audioMode, options: [.defaultToSpeaker, .allowBluetooth])
         try session.setActive(true)
+
+        // Enable voice isolation on iOS 17+ if available
+        if voiceIsolation {
+            if #available(iOS 17.0, *) {
+                try? session.setPrefersNoInterruptionsFromSystemAlerts(true)
+            }
+        }
         
         audioEngine = AVAudioEngine()
         guard let engine = audioEngine else {
@@ -85,23 +100,41 @@ class AudioCaptureService: NSObject {
         guard let floatChannelData = buffer.floatChannelData else {
             return
         }
-        
-        // Calculate RMS level for mic meter
+
         let channelData = floatChannelData[0]
         let frameLength = Int(buffer.frameLength)
-        
+
         guard frameLength > 0 else { return }
-        
+
+        // Apply mic boost (gain) if greater than 1.0
+        var processedData: [Float]
+        if micBoost > 1.0 {
+            // Apply gain using vDSP for efficiency
+            var gain = micBoost
+            processedData = [Float](repeating: 0, count: frameLength)
+            vDSP_vsmul(channelData, 1, &gain, &processedData, 1, vDSP_Length(frameLength))
+
+            // Soft clip to prevent harsh distortion
+            for i in 0..<frameLength {
+                processedData[i] = max(-1.0, min(1.0, processedData[i]))
+            }
+        } else {
+            processedData = Array(UnsafeBufferPointer(start: channelData, count: frameLength))
+        }
+
+        // Calculate RMS level for mic meter (from processed audio)
         var rms: Float = 0
-        vDSP_rmsqv(channelData, 1, &rms, vDSP_Length(frameLength))
+        processedData.withUnsafeBufferPointer { ptr in
+            vDSP_rmsqv(ptr.baseAddress!, 1, &rms, vDSP_Length(frameLength))
+        }
         let level = min(1.0, max(0.0, rms * 10.0)) // Scale for visibility
-        
+
         DispatchQueue.main.async {
             self.onMicLevel?(level)
         }
-        
+
         // Convert to Data for Whisper
-        let data = Data(bytes: channelData, count: frameLength * MemoryLayout<Float>.size)
+        let data = processedData.withUnsafeBytes { Data($0) }
         onAudioBuffer?(data)
     }
     

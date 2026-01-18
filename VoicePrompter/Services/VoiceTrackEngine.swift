@@ -71,19 +71,25 @@ class VoiceTrackEngine: ObservableObject {
         lastMatchDebug = ""
     }
     
+    /// Configure audio settings before starting
+    func configureAudio(micBoost: Float, voiceIsolation: Bool) {
+        audioCapture.micBoost = micBoost
+        audioCapture.voiceIsolation = voiceIsolation
+    }
+
     func start() async throws {
         guard !isRunning else { return }
-        
+
         // Load Whisper model if needed
         if !whisperService.isModelLoaded {
             state = .loadingModel
             try await whisperService.loadModel()
             isModelReady = true
         }
-        
+
         // Start audio capture
         try audioCapture.start()
-        
+
         isRunning = true
         state = .listening
         audioBuffer = Data()
