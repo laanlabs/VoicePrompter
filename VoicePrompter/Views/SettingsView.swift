@@ -51,6 +51,15 @@ struct SettingsView: View {
                         }
                     }
 
+                    Picker("Tracking Mode", selection: $settings.trackingMode) {
+                        ForEach(TrackingMode.allCases, id: \.self) { mode in
+                            Text(mode.rawValue).tag(mode)
+                        }
+                    }
+                    Text(settings.trackingMode.description)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
                     Toggle("Show Mic Level", isOn: $settings.showMicLevel)
                 }
 

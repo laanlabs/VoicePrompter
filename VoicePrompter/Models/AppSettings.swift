@@ -14,6 +14,20 @@ enum ScrollMode: String, CaseIterable {
     case manual = "Manual"
 }
 
+enum TrackingMode: String, CaseIterable {
+    case strict = "Strict"
+    case mix = "Mix"
+    case loose = "Loose"
+
+    var description: String {
+        switch self {
+        case .strict: return "Precise word-by-word tracking"
+        case .mix: return "Balanced tracking (default)"
+        case .loose: return "Flexible, allows improvisation"
+        }
+    }
+}
+
 class AppSettings: ObservableObject {
     @AppStorage("fontSize") var fontSize: Double = 32
     @AppStorage("textColor") var textColorData: Data = try! JSONEncoder().encode(CodableColor.white)
@@ -27,7 +41,13 @@ class AppSettings: ObservableObject {
     @AppStorage("showMicLevel") var showMicLevel: Bool = true
     @AppStorage("micBoost") var micBoost: Double = 1.0  // 1.0 to 4.0x gain
     @AppStorage("voiceIsolation") var voiceIsolation: Bool = false
-    
+    @AppStorage("trackingMode") var trackingModeRaw: String = TrackingMode.mix.rawValue
+
+    var trackingMode: TrackingMode {
+        get { TrackingMode(rawValue: trackingModeRaw) ?? .mix }
+        set { trackingModeRaw = newValue.rawValue }
+    }
+
     var textColor: Color {
         get {
             if let codableColor = try? JSONDecoder().decode(CodableColor.self, from: textColorData) {

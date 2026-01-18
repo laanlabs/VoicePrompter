@@ -298,7 +298,7 @@ struct TeleprompterView: View {
             }
         }
         .onAppear {
-            voiceTrack.loadScript(content: script.content)
+            voiceTrack.loadScript(content: script.content, trackingMode: settings.trackingMode)
         }
         .onReceive(voiceTrack.whisperService.$loadingStatus) { status in
             loadingStatusText = status

@@ -62,9 +62,10 @@ class VoiceTrackEngine: ObservableObject {
         }
     }
     
-    func loadScript(content: String) {
+    func loadScript(content: String, trackingMode: TrackingMode = .mix) {
         let plainText = MarkdownParser.extractPlainText(from: content)
         textMatcher.loadScript(plainText)
+        textMatcher.configure(for: trackingMode)
         currentWordIndex = 0
         state = .idle
         transcriptionLog = []

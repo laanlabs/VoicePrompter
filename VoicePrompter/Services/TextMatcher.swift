@@ -7,6 +7,47 @@
 
 import Foundation
 
+struct MatchingConfig {
+    var maxFuzzyDistance: Int
+    var maxSingleWordJump: Int
+    var maxPhraseJump: Int
+    var acceptanceThreshold: Double
+    var minPhraseConfidence: Double
+    var lookForwardWindow: Int
+
+    static func forMode(_ mode: TrackingMode) -> MatchingConfig {
+        switch mode {
+        case .strict:
+            return MatchingConfig(
+                maxFuzzyDistance: 1,
+                maxSingleWordJump: 2,
+                maxPhraseJump: 8,
+                acceptanceThreshold: 0.55,
+                minPhraseConfidence: 0.75,
+                lookForwardWindow: 12
+            )
+        case .mix:
+            return MatchingConfig(
+                maxFuzzyDistance: 2,
+                maxSingleWordJump: 5,
+                maxPhraseJump: 15,
+                acceptanceThreshold: 0.4,
+                minPhraseConfidence: 0.6,
+                lookForwardWindow: 20
+            )
+        case .loose:
+            return MatchingConfig(
+                maxFuzzyDistance: 3,
+                maxSingleWordJump: 10,
+                maxPhraseJump: 30,
+                acceptanceThreshold: 0.25,
+                minPhraseConfidence: 0.4,
+                lookForwardWindow: 35
+            )
+        }
+    }
+}
+
 struct MatchDebugInfo {
     let transcribedWords: [String]
     let bestMatchIndex: Int?
@@ -21,11 +62,15 @@ class TextMatcher {
     private var displayWords: [String] = []     // Original words for display (same count)
     private var currentPosition: Int = 0
     var lastDebugInfo: MatchDebugInfo?
-    
-    // Configuration
-    private let maxSingleWordJump = 5      // Single word matches can only jump this far
-    private let maxPhraseJump = 15         // Multi-word matches can jump further
+
+    // Configuration (defaults to Mix mode)
+    private var config = MatchingConfig.forMode(.mix)
     private let minPhraseWordsForJump = 2  // Need at least this many matching words to jump
+
+    func configure(for mode: TrackingMode) {
+        config = MatchingConfig.forMode(mode)
+        print("🎛️ TextMatcher configured for \(mode.rawValue) mode")
+    }
     
     func loadScript(_ plainText: String) {
         // Use consistent splitting for both display and matching
@@ -58,7 +103,7 @@ class TextMatcher {
         
         // Search window: look back a bit and forward
         let lookBack = 3
-        let lookForward = maxPhraseJump + 5
+        let lookForward = config.lookForwardWindow
         let startIndex = max(0, currentPosition - lookBack)
         let endIndex = min(scriptWords.count, currentPosition + lookForward)
         
@@ -128,7 +173,7 @@ class TextMatcher {
         // Accept match if confidence + proximity is good enough
         if let match = bestMatch {
             let finalScore = match.confidence + match.proximityBonus
-            if finalScore > 0.4 {
+            if finalScore > config.acceptanceThreshold {
                 print("✅ Best match at index \(match.index) (conf: \(String(format: "%.2f", match.confidence)), prox: \(String(format: "%.2f", match.proximityBonus)), words: \(match.matchedWords))")
                 currentPosition = match.index + match.matchedWords
                 return match.index
@@ -165,7 +210,7 @@ class TextMatcher {
             } else {
                 let distance = levenshteinDistance(transcribedWord, scriptWord)
                 let maxLen = max(transcribedWord.count, scriptWord.count)
-                if maxLen > 0 && distance <= 2 && distance < maxLen / 2 {
+                if maxLen > 0 && distance <= config.maxFuzzyDistance && distance < maxLen / 2 {
                     let wordConfidence = 1.0 - (Double(distance) / Double(maxLen))
                     matchScore += wordConfidence
                     matchedCount += 1
@@ -206,17 +251,17 @@ class TextMatcher {
         if jumpDistance < 0 {
             return true
         }
-        
+
         // Small forward movement is always ok
-        if jumpDistance <= maxSingleWordJump {
+        if jumpDistance <= config.maxSingleWordJump {
             return true
         }
-        
+
         // Medium jump requires multiple matched words with good confidence
-        if jumpDistance <= maxPhraseJump {
-            return matchedWords >= minPhraseWordsForJump && confidence >= 0.6
+        if jumpDistance <= config.maxPhraseJump {
+            return matchedWords >= minPhraseWordsForJump && confidence >= config.minPhraseConfidence
         }
-        
+
         // Large jumps require very strong evidence
         return matchedWords >= 3 && confidence >= 0.8
     }
