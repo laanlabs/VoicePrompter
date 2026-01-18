@@ -21,8 +21,10 @@ struct TeleprompterView: View {
     @State private var timer: Timer?
     @State private var showDebugPanel = false
     @State private var loadingStatusText = ""
+    @State private var loadingSubtitleText = ""
     @State private var downloadProgress: Double = 0.0
     @State private var isDownloading: Bool = false
+    @State private var isLoadingFromCache: Bool = false
     @State private var showDownloadConfirmation = false
     @State private var showErrorState = false
     @State private var canRetryDownload = false
@@ -282,8 +284,10 @@ struct TeleprompterView: View {
                 if case .loadingModel = voiceTrack.state {
                     LoadingOverlayView(
                         status: loadingStatusText,
+                        subtitle: loadingSubtitleText,
                         progress: downloadProgress,
                         isDownloading: isDownloading,
+                        isLoadingFromCache: isLoadingFromCache,
                         showError: showErrorState,
                         canRetry: canRetryDownload,
                         onRetry: {
@@ -299,11 +303,17 @@ struct TeleprompterView: View {
         .onReceive(voiceTrack.whisperService.$loadingStatus) { status in
             loadingStatusText = status
         }
+        .onReceive(voiceTrack.whisperService.$loadingSubtitle) { subtitle in
+            loadingSubtitleText = subtitle
+        }
         .onReceive(voiceTrack.whisperService.$downloadProgress) { progress in
             downloadProgress = progress
         }
         .onReceive(voiceTrack.whisperService.$isDownloading) { downloading in
             isDownloading = downloading
+        }
+        .onReceive(voiceTrack.whisperService.$isLoadingFromCache) { loading in
+            isLoadingFromCache = loading
         }
         .onReceive(voiceTrack.whisperService.$errorMessage) { error in
             showErrorState = error != nil
@@ -452,8 +462,10 @@ struct VoiceTrackStatusView: View {
 // Loading overlay with actual status and progress bar from WhisperService
 struct LoadingOverlayView: View {
     let status: String
+    let subtitle: String
     let progress: Double
     let isDownloading: Bool
+    let isLoadingFromCache: Bool
     let showError: Bool
     let canRetry: Bool
     let onRetry: () -> Void
@@ -465,10 +477,10 @@ struct LoadingOverlayView: View {
             return "Download Failed"
         } else if isDownloading {
             return "Downloading Model"
+        } else if isLoadingFromCache {
+            return "Loading Model"
         } else if status.lowercased().contains("check") {
             return "Checking for Model"
-        } else if status.lowercased().contains("cache") {
-            return "Loading from Cache"
         } else if status.lowercased().contains("warm") {
             return "Preparing Model"
         } else if status.lowercased().contains("retry") {
@@ -478,16 +490,26 @@ struct LoadingOverlayView: View {
         }
     }
 
-    private var subtitle: String {
+    private var displaySubtitle: String {
         if showError && canRetry {
             return "This is usually a temporary server issue"
+        } else if !subtitle.isEmpty {
+            return subtitle
         } else if isDownloading {
             return "First-time setup (~150MB)"
-        } else if status.lowercased().contains("cache") {
-            return "Using previously downloaded model"
         } else {
             return ""
         }
+    }
+
+    /// Show progress ring for downloads or cache loading
+    private var showProgressRing: Bool {
+        (isDownloading || isLoadingFromCache) && !showError
+    }
+
+    /// Progress ring color - blue for cache, green for download
+    private var progressColor: Color {
+        isLoadingFromCache ? .blue : .green
     }
 
     var body: some View {
@@ -503,8 +525,8 @@ struct LoadingOverlayView: View {
                         .foregroundColor(.orange)
                 }
                 // Animated spinner or progress indicator
-                else if isDownloading {
-                    // Show progress ring when downloading
+                else if showProgressRing {
+                    // Show progress ring when downloading or loading from cache
                     ZStack {
                         Circle()
                             .stroke(Color.white.opacity(0.2), lineWidth: 8)
@@ -512,7 +534,7 @@ struct LoadingOverlayView: View {
 
                         Circle()
                             .trim(from: 0, to: progress)
-                            .stroke(Color.green, style: StrokeStyle(lineWidth: 8, lineCap: .round))
+                            .stroke(progressColor, style: StrokeStyle(lineWidth: 8, lineCap: .round))
                             .frame(width: 80, height: 80)
                             .rotationEffect(.degrees(-90))
                             .animation(.easeInOut(duration: 0.3), value: progress)
@@ -541,10 +563,11 @@ struct LoadingOverlayView: View {
                     .padding(.horizontal)
 
                 // Subtitle info
-                if !subtitle.isEmpty {
-                    Text(subtitle)
+                if !displaySubtitle.isEmpty {
+                    Text(displaySubtitle)
                         .font(.caption)
-                        .foregroundColor(showError ? .white.opacity(0.6) : .green.opacity(0.8))
+                        .foregroundColor(showError ? .white.opacity(0.6) : .white.opacity(0.6))
+                        .multilineTextAlignment(.center)
                 }
 
                 // Retry button when error occurs
@@ -564,7 +587,7 @@ struct LoadingOverlayView: View {
                     .padding(.top, 8)
                 }
 
-                // Progress bar for download
+                // Progress bar for download only
                 if isDownloading && !showError {
                     VStack(spacing: 8) {
                         GeometryReader { geometry in
@@ -585,8 +608,8 @@ struct LoadingOverlayView: View {
                             .font(.caption)
                             .foregroundColor(.white.opacity(0.5))
                     }
-                } else if status.lowercased().contains("cache") && !showError {
-                    Text("Using cached model - no download needed")
+                } else if isLoadingFromCache && !showError {
+                    Text("No download needed - using cached model")
                         .font(.caption)
                         .foregroundColor(.green.opacity(0.7))
                 }

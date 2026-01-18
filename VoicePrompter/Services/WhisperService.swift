@@ -14,13 +14,16 @@ class WhisperService: ObservableObject {
     @Published var isModelLoaded = false
     @Published var isLoading = false
     @Published var loadingStatus: String = ""
+    @Published var loadingSubtitle: String = ""  // Secondary status line
     @Published var downloadProgress: Double = 0.0
     @Published var isDownloading: Bool = false
+    @Published var isLoadingFromCache: Bool = false
     @Published var errorMessage: String?
     @Published var canRetry: Bool = false
 
     private var whisperKit: WhisperKit?
     private let modelName = "openai_whisper-small.en"
+    private var cacheLoadingTask: Task<Void, Never>?
 
     // Retry configuration
     private let maxRetries = 3
@@ -68,6 +71,56 @@ class WhisperService: ObservableObject {
         return !(cacheStatus.exists && cacheStatus.fileCount >= 5)
     }
 
+    /// Simulate progress for cache loading with informative stages
+    private func startCacheLoadingProgress() {
+        isLoadingFromCache = true
+        downloadProgress = 0.0
+
+        cacheLoadingTask = Task { @MainActor in
+            let stages: [(progress: Double, status: String, subtitle: String, duration: UInt64)] = [
+                (0.05, "Loading cached model...", "Reading model files from storage", 500_000_000),
+                (0.15, "Initializing encoder...", "Setting up audio processing", 2_000_000_000),
+                (0.35, "Loading neural network...", "This may take a moment on older devices", 3_000_000_000),
+                (0.55, "Preparing decoder...", "Loading language model", 2_500_000_000),
+                (0.75, "Optimizing for device...", "Configuring for best performance", 2_000_000_000),
+                (0.90, "Almost ready...", "Final initialization", 1_500_000_000),
+            ]
+
+            for stage in stages {
+                guard !Task.isCancelled else { return }
+
+                // Animate progress to this stage
+                let startProgress = self.downloadProgress
+                let targetProgress = stage.progress
+                let steps = 10
+                let stepDelay = stage.duration / UInt64(steps)
+
+                for step in 1...steps {
+                    guard !Task.isCancelled else { return }
+                    let fraction = Double(step) / Double(steps)
+                    self.downloadProgress = startProgress + (targetProgress - startProgress) * fraction
+                    try? await Task.sleep(nanoseconds: stepDelay)
+                }
+
+                self.loadingStatus = stage.status
+                self.loadingSubtitle = stage.subtitle
+            }
+
+            // Hold at 90% until actual loading completes
+            while !Task.isCancelled && self.isLoadingFromCache {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+        }
+    }
+
+    private func stopCacheLoadingProgress() {
+        cacheLoadingTask?.cancel()
+        cacheLoadingTask = nil
+        isLoadingFromCache = false
+        downloadProgress = 1.0
+        loadingSubtitle = ""
+    }
+
     /// Estimated download size for user disclosure
     static let estimatedDownloadSize = "~150 MB"
     
@@ -87,11 +140,12 @@ class WhisperService: ObservableObject {
         do {
             if cacheStatus.exists && cacheStatus.fileCount >= 5 {
                 // Model appears to be cached - try loading directly
-                loadingStatus = "Loading cached model..."
                 isDownloading = false
-                downloadProgress = 1.0
                 print("✅ Model found in cache with \(cacheStatus.fileCount) files")
-                
+
+                // Start the progress animation
+                startCacheLoadingProgress()
+
                 do {
                     let whisper = try await WhisperKit(
                         modelFolder: modelPath.path,
@@ -101,9 +155,11 @@ class WhisperService: ObservableObject {
                         load: true,
                         download: false
                     )
+                    stopCacheLoadingProgress()
                     whisperKit = whisper
                     print("✅ Loaded model from cache successfully")
                 } catch {
+                    stopCacheLoadingProgress()
                     // Cache might be corrupted, try downloading fresh
                     print("⚠️ Failed to load from cache: \(error.localizedDescription)")
                     print("📥 Will try downloading fresh copy...")
@@ -134,6 +190,7 @@ class WhisperService: ObservableObject {
         } catch {
             isLoading = false
             isDownloading = false
+            stopCacheLoadingProgress()
 
             // Provide user-friendly error message
             let userMessage: String
