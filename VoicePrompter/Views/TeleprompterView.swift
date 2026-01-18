@@ -471,6 +471,7 @@ struct LoadingOverlayView: View {
     let onRetry: () -> Void
 
     @State private var dots = ""
+    @State private var isPulsing = false
 
     private var title: String {
         if showError {
@@ -512,6 +513,11 @@ struct LoadingOverlayView: View {
         isLoadingFromCache ? .blue : .green
     }
 
+    /// Whether we're in the "waiting" phase (progress >= 70% for cache loading)
+    private var isWaitingPhase: Bool {
+        isLoadingFromCache && progress >= 0.70 && !showError
+    }
+
     var body: some View {
         ZStack {
             Color.black.opacity(0.85)
@@ -528,6 +534,16 @@ struct LoadingOverlayView: View {
                 else if showProgressRing {
                     // Show progress ring when downloading or loading from cache
                     ZStack {
+                        // Pulsing glow when in waiting phase to show activity
+                        if isWaitingPhase {
+                            Circle()
+                                .fill(progressColor.opacity(0.3))
+                                .frame(width: 100, height: 100)
+                                .scaleEffect(isPulsing ? 1.2 : 1.0)
+                                .opacity(isPulsing ? 0.0 : 0.5)
+                                .animation(.easeInOut(duration: 1.5).repeatForever(autoreverses: false), value: isPulsing)
+                        }
+
                         Circle()
                             .stroke(Color.white.opacity(0.2), lineWidth: 8)
                             .frame(width: 80, height: 80)
@@ -539,9 +555,20 @@ struct LoadingOverlayView: View {
                             .rotationEffect(.degrees(-90))
                             .animation(.easeInOut(duration: 0.3), value: progress)
 
-                        Text("\(Int(progress * 100))%")
-                            .font(.headline.bold())
-                            .foregroundColor(.white)
+                        // Show working indicator instead of percentage when in waiting phase
+                        if isWaitingPhase {
+                            Image(systemName: "waveform")
+                                .font(.title2)
+                                .foregroundColor(.white)
+                                .symbolEffect(.variableColor.iterative, options: .repeating)
+                        } else {
+                            Text("\(Int(progress * 100))%")
+                                .font(.headline.bold())
+                                .foregroundColor(.white)
+                        }
+                    }
+                    .onAppear {
+                        isPulsing = true
                     }
                 } else {
                     // Animated spinner for checking/loading
@@ -609,9 +636,16 @@ struct LoadingOverlayView: View {
                             .foregroundColor(.white.opacity(0.5))
                     }
                 } else if isLoadingFromCache && !showError {
-                    Text("No download needed - using cached model")
-                        .font(.caption)
-                        .foregroundColor(.green.opacity(0.7))
+                    VStack(spacing: 4) {
+                        Text("No download needed — using cached model")
+                            .font(.caption)
+                            .foregroundColor(.green.opacity(0.7))
+                        if isWaitingPhase {
+                            Text("Older devices may take longer to initialize")
+                                .font(.caption2)
+                                .foregroundColor(.white.opacity(0.5))
+                        }
+                    }
                 }
             }
             .padding(40)

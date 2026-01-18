@@ -77,13 +77,16 @@ class WhisperService: ObservableObject {
         downloadProgress = 0.0
 
         cacheLoadingTask = Task { @MainActor in
+            // Cap progress at 70% - the actual WhisperKit initialization takes significant time
+            // especially on older devices. We don't want users to think it's "almost done" when
+            // the heaviest processing hasn't completed yet.
             let stages: [(progress: Double, status: String, subtitle: String, duration: UInt64)] = [
                 (0.05, "Loading cached model...", "Reading model files from storage", 500_000_000),
                 (0.15, "Initializing encoder...", "Setting up audio processing", 2_000_000_000),
-                (0.35, "Loading neural network...", "This may take a moment on older devices", 3_000_000_000),
-                (0.55, "Preparing decoder...", "Loading language model", 2_500_000_000),
-                (0.75, "Optimizing for device...", "Configuring for best performance", 2_000_000_000),
-                (0.90, "Almost ready...", "Final initialization", 1_500_000_000),
+                (0.30, "Loading neural network...", "This step takes longer on older devices", 3_000_000_000),
+                (0.45, "Preparing decoder...", "Loading language model weights", 2_500_000_000),
+                (0.60, "Optimizing for device...", "Compiling neural network for your chip", 2_000_000_000),
+                (0.70, "Initializing speech engine...", "This is the longest step — please wait", 1_500_000_000),
             ]
 
             for stage in stages {
@@ -106,9 +109,21 @@ class WhisperService: ObservableObject {
                 self.loadingSubtitle = stage.subtitle
             }
 
-            // Hold at 90% until actual loading completes
+            // Hold at 70% until actual loading completes, but continue showing activity
+            // by cycling through encouraging messages
+            let waitingMessages = [
+                "Compiling neural network for your device...",
+                "Optimizing model performance...",
+                "Almost there — finalizing setup...",
+                "Loading speech recognition weights...",
+            ]
+            var messageIndex = 0
+
             while !Task.isCancelled && self.isLoadingFromCache {
-                try? await Task.sleep(nanoseconds: 500_000_000)
+                // Update subtitle every 3 seconds to show activity
+                self.loadingSubtitle = waitingMessages[messageIndex]
+                messageIndex = (messageIndex + 1) % waitingMessages.count
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
             }
         }
     }
