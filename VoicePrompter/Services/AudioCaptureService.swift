@@ -8,6 +8,33 @@
 import AVFoundation
 import Accelerate
 
+struct AudioInputSource: Identifiable, Equatable {
+    let id: String
+    let name: String
+    let portType: AVAudioSession.Port
+
+    var icon: String {
+        switch portType {
+        case .builtInMic:
+            return "iphone"
+        case .headsetMic:
+            return "headphones"
+        case .bluetoothHFP, .bluetoothA2DP, .bluetoothLE:
+            return "airpodspro"
+        case .usbAudio:
+            return "cable.connector"
+        case .carAudio:
+            return "car"
+        default:
+            return "mic"
+        }
+    }
+
+    static func == (lhs: AudioInputSource, rhs: AudioInputSource) -> Bool {
+        lhs.id == rhs.id
+    }
+}
+
 class AudioCaptureService: NSObject {
     private var audioEngine: AVAudioEngine?
     private var inputNode: AVAudioInputNode?
@@ -19,7 +46,44 @@ class AudioCaptureService: NSObject {
     // Audio enhancement settings
     var micBoost: Float = 1.0  // Gain multiplier (1.0 to 4.0)
     var voiceIsolation: Bool = false
-    
+
+    /// Get all available audio input sources
+    func getAvailableInputs() -> [AudioInputSource] {
+        let session = AVAudioSession.sharedInstance()
+        guard let inputs = session.availableInputs else { return [] }
+
+        return inputs.map { port in
+            AudioInputSource(
+                id: port.uid,
+                name: port.portName,
+                portType: port.portType
+            )
+        }
+    }
+
+    /// Get the currently active input source
+    func getCurrentInput() -> AudioInputSource? {
+        let session = AVAudioSession.sharedInstance()
+        guard let currentRoute = session.currentRoute.inputs.first else { return nil }
+
+        return AudioInputSource(
+            id: currentRoute.uid,
+            name: currentRoute.portName,
+            portType: currentRoute.portType
+        )
+    }
+
+    /// Switch to a specific input source
+    func setInput(_ source: AudioInputSource) throws {
+        let session = AVAudioSession.sharedInstance()
+        guard let inputs = session.availableInputs,
+              let port = inputs.first(where: { $0.uid == source.id }) else {
+            throw AudioCaptureError.inputNotFound
+        }
+
+        try session.setPreferredInput(port)
+    }
+
     func start() throws {
         guard !isCapturing else { return }
 
@@ -159,5 +223,6 @@ enum AudioCaptureError: Error {
     case engineCreationFailed
     case inputNodeNotFound
     case formatCreationFailed
+    case inputNotFound
 }
 

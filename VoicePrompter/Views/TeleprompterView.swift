@@ -230,22 +230,15 @@ struct TeleprompterView: View {
                     
                     // Bottom controls
                     VStack(spacing: 16) {
-                        // Progress and time
+                        // Elapsed time
                         HStack {
-                            if voiceTrack.wordCount > 0 {
-                                Text("\(Int((Double(voiceTrack.currentWordIndex) / Double(voiceTrack.wordCount)) * 100))%")
-                                    .font(.caption)
-                                    .foregroundColor(.white.opacity(0.7))
-                            }
-                            
                             Spacer()
-                            
                             Text(formatTime(elapsedTime))
                                 .font(.caption)
                                 .foregroundColor(.white.opacity(0.7))
                         }
                         .padding(.horizontal)
-                        
+
                         // Mic level (if enabled)
                         if settings.showMicLevel {
                             MicLevelView(level: voiceTrack.micLevel)
@@ -256,11 +249,38 @@ struct TeleprompterView: View {
                     .padding(.bottom)
                 }
 
-                // Small VoiceTrack toggle in lower right corner
+                // Bottom corner controls: Mic source (left) and Play/Pause (right)
                 VStack {
                     Spacer()
                     HStack {
+                        // Mic source button (bottom left) - only when voice tracking is active
+                        if isVoiceTrackActive, let currentInput = voiceTrack.currentInputSource {
+                            Menu {
+                                ForEach(voiceTrack.availableInputSources) { source in
+                                    Button {
+                                        voiceTrack.setInputSource(source)
+                                    } label: {
+                                        Label(source.name, systemImage: source.icon)
+                                        if source == currentInput {
+                                            Image(systemName: "checkmark")
+                                        }
+                                    }
+                                }
+                            } label: {
+                                Image(systemName: currentInput.icon)
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundColor(.white)
+                                    .frame(width: 44, height: 44)
+                                    .background(Color.blue.opacity(0.8))
+                                    .clipShape(Circle())
+                            }
+                            .padding(.leading, 20)
+                            .padding(.bottom, 30)
+                        }
+
                         Spacer()
+
+                        // Play/Pause button (bottom right)
                         Button {
                             if isVoiceTrackActive {
                                 stopVoiceTrack()

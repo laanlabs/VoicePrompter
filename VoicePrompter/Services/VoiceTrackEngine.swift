@@ -34,7 +34,9 @@ class VoiceTrackEngine: ObservableObject {
     @Published var isModelReady: Bool = false
     @Published var transcriptionLog: [TranscriptionLogEntry] = []
     @Published var lastMatchDebug: String = ""
-    
+    @Published var currentInputSource: AudioInputSource?
+    @Published var availableInputSources: [AudioInputSource] = []
+
     private let audioCapture = AudioCaptureService()
     let whisperService = WhisperService()  // Exposed to allow observing loading status
     private let textMatcher = TextMatcher()
@@ -78,6 +80,23 @@ class VoiceTrackEngine: ObservableObject {
         audioCapture.voiceIsolation = voiceIsolation
     }
 
+    /// Refresh available audio input sources
+    func refreshInputSources() {
+        availableInputSources = audioCapture.getAvailableInputs()
+        currentInputSource = audioCapture.getCurrentInput()
+    }
+
+    /// Switch to a different audio input source
+    func setInputSource(_ source: AudioInputSource) {
+        do {
+            try audioCapture.setInput(source)
+            currentInputSource = source
+            print("🎤 Switched to input: \(source.name)")
+        } catch {
+            print("❌ Failed to switch input: \(error)")
+        }
+    }
+
     func start() async throws {
         guard !isRunning else { return }
 
@@ -90,6 +109,9 @@ class VoiceTrackEngine: ObservableObject {
 
         // Start audio capture
         try audioCapture.start()
+
+        // Refresh input sources after audio session is active
+        refreshInputSources()
 
         isRunning = true
         state = .listening
