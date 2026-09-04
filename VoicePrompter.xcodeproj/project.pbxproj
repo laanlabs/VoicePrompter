@@ -8,19 +8,33 @@
 
 /* Begin PBXBuildFile section */
 		7F5E619C2EF8524E00AF0266 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = 7F5E619B2EF8524E00AF0266 /* WhisperKit */; };
-		7FCF91EA2F0F3BD5003524EB /* MT.gpx in Sources */ = {isa = PBXBuildFile; fileRef = 7FCF91E92F0F3BD2003524EB /* MT.gpx */; };
+		A1000000000000000000000C /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = 7F5E619B2EF8524E00AF0266 /* WhisperKit */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A10000000000000000000006 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 7F5E61102EF84E4200AF0266 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7F5E61172EF84E4200AF0266;
+			remoteInfo = VoicePrompter;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		7F5E61182EF84E4200AF0266 /* VoicePrompter.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = VoicePrompter.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		7FCF91E92F0F3BD2003524EB /* MT.gpx */ = {isa = PBXFileReference; lastKnownFileType = text; path = MT.gpx; sourceTree = "<group>"; };
-		7FCF91EB2F0F3C01003524EB /* MT.gpx */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = MT.gpx; sourceTree = "<group>"; };
+		A10000000000000000000002 /* VoicePrompterTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = VoicePrompterTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		7F5E611A2EF84E4200AF0266 /* VoicePrompter */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = VoicePrompter;
+			sourceTree = "<group>";
+		};
+		A10000000000000000000001 /* VoicePrompterTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = VoicePrompterTests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -34,16 +48,23 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A10000000000000000000004 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1000000000000000000000C /* WhisperKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		7F5E610F2EF84E4200AF0266 = {
 			isa = PBXGroup;
 			children = (
-				7FCF91EB2F0F3C01003524EB /* MT.gpx */,
 				7F5E611A2EF84E4200AF0266 /* VoicePrompter */,
+				A10000000000000000000001 /* VoicePrompterTests */,
 				7F5E61192EF84E4200AF0266 /* Products */,
-				7FCF91E92F0F3BD2003524EB /* MT.gpx */,
 			);
 			sourceTree = "<group>";
 		};
@@ -51,6 +72,7 @@
 			isa = PBXGroup;
 			children = (
 				7F5E61182EF84E4200AF0266 /* VoicePrompter.app */,
+				A10000000000000000000002 /* VoicePrompterTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -80,6 +102,30 @@
 			productName = VoicePrompter;
 			productReference = 7F5E61182EF84E4200AF0266 /* VoicePrompter.app */;
 			productType = "com.apple.product-type.application";
+		};
+		A10000000000000000000008 /* VoicePrompterTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A10000000000000000000009 /* Build configuration list for PBXNativeTarget "VoicePrompterTests" */;
+			buildPhases = (
+				A10000000000000000000003 /* Sources */,
+				A10000000000000000000004 /* Frameworks */,
+				A10000000000000000000005 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A10000000000000000000007 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A10000000000000000000001 /* VoicePrompterTests */,
+			);
+			name = VoicePrompterTests;
+			packageProductDependencies = (
+				7F5E619B2EF8524E00AF0266 /* WhisperKit */,
+			);
+			productName = VoicePrompterTests;
+			productReference = A10000000000000000000002 /* VoicePrompterTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
 
@@ -114,12 +160,20 @@
 			projectRoot = "";
 			targets = (
 				7F5E61172EF84E4200AF0266 /* VoicePrompter */,
+				A10000000000000000000008 /* VoicePrompterTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		7F5E61162EF84E4200AF0266 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A10000000000000000000005 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -133,11 +187,25 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				7FCF91EA2F0F3BD5003524EB /* MT.gpx in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A10000000000000000000003 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A10000000000000000000007 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 7F5E61172EF84E4200AF0266 /* VoicePrompter */;
+			targetProxy = A10000000000000000000006 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		7F5E61212EF84E4400AF0266 /* Debug */ = {
@@ -267,7 +335,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = 34FWY7G2HB;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -281,7 +349,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0.1;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.laan.labs.VoicePrompter;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -300,7 +368,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = 34FWY7G2HB;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -314,7 +382,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0.1;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.laan.labs.VoicePrompter;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -324,6 +392,38 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		A1000000000000000000000A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 34FWY7G2HB;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.laan.labs.VoicePrompterTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/VoicePrompter.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/VoicePrompter";
+			};
+			name = Debug;
+		};
+		A1000000000000000000000B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 34FWY7G2HB;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.laan.labs.VoicePrompterTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/VoicePrompter.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/VoicePrompter";
 			};
 			name = Release;
 		};
@@ -348,6 +448,15 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		A10000000000000000000009 /* Build configuration list for PBXNativeTarget "VoicePrompterTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A1000000000000000000000A /* Debug */,
+				A1000000000000000000000B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
@@ -355,8 +464,8 @@
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/argmaxinc/WhisperKit.git";
 			requirement = {
-				branch = main;
-				kind = branch;
+				kind = revision;
+				revision = 9c673e35193fe4e67593dd2973c157ebe666e598;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */

@@ -1,347 +1,226 @@
-//
-//  WhisperService.swift
-//  VoicePrompter
-//
-//  Created by jclaan on 12/21/25.
-//
-
 import Foundation
 import Combine
+import OSLog
 import WhisperKit
 
 @MainActor
-class WhisperService: ObservableObject {
-    @Published var isModelLoaded = false
-    @Published var isLoading = false
-    @Published var loadingStatus: String = ""
-    @Published var loadingSubtitle: String = ""  // Secondary status line
-    @Published var downloadProgress: Double = 0.0
-    @Published var isDownloading: Bool = false
-    @Published var isLoadingFromCache: Bool = false
-    @Published var errorMessage: String?
-    @Published var canRetry: Bool = false
+protocol SpeechModelBackend: AnyObject {
+    func download(model: SpeechModel, root: URL, progress: @escaping @Sendable (Double) -> Void) async throws
+    func prepare(folder: URL, tokenizerRoot: URL) async throws
+    func prewarm() async throws
+    func load() async throws
+    func unload() async
+    func transcribe(audioArray: [Float], decodeOptions: DecodingOptions) async throws -> [TranscriptionResult]
+}
 
-    private var whisperKit: WhisperKit?
-    private let modelName = "openai_whisper-small.en"
-    private var cacheLoadingTask: Task<Void, Never>?
+@MainActor
+final class WhisperKitBackend: SpeechModelBackend {
+    private var whisper: WhisperKit?
 
-    // Retry configuration
-    private let maxRetries = 3
-    private let baseRetryDelay: UInt64 = 2_000_000_000 // 2 seconds in nanoseconds
-    
-    // Silence threshold - lower to be more sensitive
+    func download(model: SpeechModel, root: URL, progress: @escaping @Sendable (Double) -> Void) async throws {
+        _ = try await WhisperKit.download(variant: model.name, downloadBase: root) {
+            progress($0.fractionCompleted)
+        }
+    }
+
+    func prepare(folder: URL, tokenizerRoot: URL) async throws {
+        whisper = try await WhisperKit(modelFolder: folder.path, tokenizerFolder: tokenizerRoot,
+                                       verbose: false, logLevel: .error,
+                                       prewarm: false, load: false, download: false)
+    }
+
+    func prewarm() async throws {
+        guard let whisper else { throw SpeechSetupError.modelNotLoaded }
+        try await whisper.prewarmModels()
+    }
+
+    func load() async throws {
+        guard let whisper else { throw SpeechSetupError.modelNotLoaded }
+        try await whisper.loadModels()
+    }
+
+    func unload() async {
+        await whisper?.unloadModels()
+        whisper = nil
+    }
+
+    func transcribe(audioArray: [Float], decodeOptions: DecodingOptions) async throws -> [TranscriptionResult] {
+        guard let whisper else { throw SpeechSetupError.modelNotLoaded }
+        return try await whisper.transcribe(audioArray: audioArray, decodeOptions: decodeOptions)
+    }
+}
+
+@MainActor
+final class WhisperService: ObservableObject {
+    // Reopening a script reuses one model and waits for any canceled load to finish.
+    static let shared = WhisperService()
+
+    @Published private(set) var isModelLoaded = false
+    @Published private(set) var isLoading = false
+    @Published private(set) var loadingStatus = ""
+    @Published private(set) var loadingSubtitle = ""
+    @Published private(set) var downloadProgress = 0.0
+    @Published private(set) var isDownloading = false
+    @Published private(set) var errorMessage: String?
+
+    let model: SpeechModel
+    private let cache: SpeechModelCache
+    private let backend: any SpeechModelBackend
+    private var loadingTask: Task<Void, Error>?
+    private var loadID: UUID?
+    private var isTranscribing = false
+    private let logger = Logger(subsystem: "com.laan.labs.VoicePrompter", category: "SpeechSetup")
     private let silenceThreshold: Float = 0.0005
-    
-    // Standard path where WhisperKit caches models
-    private var modelBasePath: URL {
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("huggingface")
-            .appendingPathComponent("models")
-            .appendingPathComponent("argmaxinc")
-            .appendingPathComponent("whisperkit-coreml")
-    }
-    
-    private var modelPath: URL {
-        modelBasePath.appendingPathComponent(modelName)
-    }
-    
-    /// Check if the model folder exists and has content
-    private func checkModelCache() -> (exists: Bool, fileCount: Int, path: String) {
-        let fileManager = FileManager.default
-        let path = modelPath.path
 
-        guard fileManager.fileExists(atPath: path) else {
-            return (false, 0, path)
-        }
+    var estimatedDownloadSize: String { model.estimatedDownloadSize }
 
-        do {
-            let contents = try fileManager.contentsOfDirectory(atPath: path)
-            // Filter to only count actual model files (not hidden files)
-            let modelFiles = contents.filter { !$0.hasPrefix(".") }
-            return (modelFiles.count > 0, modelFiles.count, path)
-        } catch {
-            return (false, 0, path)
-        }
+    init(model: SpeechModel? = nil, downloadRoot: URL? = nil, backend: (any SpeechModelBackend)? = nil) {
+        let selected = model ?? SpeechModel.recommended(defaultModel: WhisperKit.recommendedModels().default,
+                                                        physicalMemory: ProcessInfo.processInfo.physicalMemory)
+        self.model = selected
+        self.cache = SpeechModelCache(downloadRoot: downloadRoot ?? FileManager.default.urls(
+            for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("huggingface"), model: selected)
+        self.backend = backend ?? WhisperKitBackend()
     }
 
-    /// Public method to check if download will be required (for pre-download prompt)
     func needsDownload() -> Bool {
-        let cacheStatus = checkModelCache()
-        // Model is considered cached if it exists with at least 5 files
-        return !(cacheStatus.exists && cacheStatus.fileCount >= 5)
+        !isModelLoaded && !(cache.hasModelReceipt && cache.hasModelFiles && cache.hasTokenizer)
     }
 
-    /// Simulate progress for cache loading with informative stages
-    private func startCacheLoadingProgress() {
-        isLoadingFromCache = true
-        downloadProgress = 0.0
-
-        cacheLoadingTask = Task { @MainActor in
-            // Cap progress at 70% - the actual WhisperKit initialization takes significant time
-            // especially on older devices. We don't want users to think it's "almost done" when
-            // the heaviest processing hasn't completed yet.
-            let stages: [(progress: Double, status: String, subtitle: String, duration: UInt64)] = [
-                (0.05, "Loading cached model...", "Reading model files from storage", 500_000_000),
-                (0.15, "Initializing encoder...", "Setting up audio processing", 2_000_000_000),
-                (0.30, "Loading neural network...", "This step takes longer on older devices", 3_000_000_000),
-                (0.45, "Preparing decoder...", "Loading language model weights", 2_500_000_000),
-                (0.60, "Optimizing for device...", "Compiling neural network for your chip", 2_000_000_000),
-                (0.70, "Initializing speech engine...", "This is the longest step — please wait", 1_500_000_000),
-            ]
-
-            for stage in stages {
-                guard !Task.isCancelled else { return }
-
-                // Animate progress to this stage
-                let startProgress = self.downloadProgress
-                let targetProgress = stage.progress
-                let steps = 10
-                let stepDelay = stage.duration / UInt64(steps)
-
-                for step in 1...steps {
-                    guard !Task.isCancelled else { return }
-                    let fraction = Double(step) / Double(steps)
-                    self.downloadProgress = startProgress + (targetProgress - startProgress) * fraction
-                    try? await Task.sleep(nanoseconds: stepDelay)
-                }
-
-                self.loadingStatus = stage.status
-                self.loadingSubtitle = stage.subtitle
+    func loadModel() async throws {
+        try Task.checkCancellation()
+        // Core ML may finish a native call after cancellation. Keep ownership until
+        // it has unloaded, so a quick retry never overlaps that work.
+        if let previous = loadingTask, previous.isCancelled {
+            _ = await previous.result
+            try Task.checkCancellation()
+        }
+        if isModelLoaded { return }
+        let task: Task<Void, Error>
+        if let existing = loadingTask {
+            task = existing
+        } else {
+            let id = UUID()
+            loadID = id
+            task = Task {
+                defer { self.loadingTask = nil; self.loadID = nil }
+                try await self.performLoad(id: id)
             }
-
-            // Hold at 70% until actual loading completes, but continue showing activity
-            // by cycling through encouraging messages
-            let waitingMessages = [
-                "Compiling neural network for your device...",
-                "Optimizing model performance...",
-                "Almost there — finalizing setup...",
-                "Loading speech recognition weights...",
-            ]
-            var messageIndex = 0
-
-            while !Task.isCancelled && self.isLoadingFromCache {
-                // Update subtitle every 3 seconds to show activity
-                self.loadingSubtitle = waitingMessages[messageIndex]
-                messageIndex = (messageIndex + 1) % waitingMessages.count
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
-            }
+            loadingTask = task
+        }
+        try await withTaskCancellationHandler {
+            try await task.value
+            try Task.checkCancellation()
+        } onCancel: {
+            task.cancel()
         }
     }
 
-    private func stopCacheLoadingProgress() {
-        cacheLoadingTask?.cancel()
-        cacheLoadingTask = nil
-        isLoadingFromCache = false
-        downloadProgress = 1.0
-        loadingSubtitle = ""
-    }
+    func cancelLoading() { loadingTask?.cancel() }
 
-    /// Estimated download size for user disclosure
-    static let estimatedDownloadSize = "~150 MB"
-    
-    func loadModel() async throws {
-        guard !isModelLoaded else { return }
-        
+    private func performLoad(id: UUID) async throws {
         isLoading = true
         errorMessage = nil
-        
-        // Check for cached model first
-        loadingStatus = "Checking for speech model..."
-        print("🔍 Checking for cached model...")
-        
-        let cacheStatus = checkModelCache()
-        print("📁 Cache check: exists=\(cacheStatus.exists), files=\(cacheStatus.fileCount), path=\(cacheStatus.path)")
-        
+        downloadProgress = 0
+        loadingStatus = "Checking speech files…"
+        loadingSubtitle = ""
+        logger.info("Starting speech setup: \(self.model.name, privacy: .public)")
+        var initializing = false
+        defer { isLoading = false; isDownloading = false; loadingSubtitle = "" }
+
         do {
-            if cacheStatus.exists && cacheStatus.fileCount >= 5 {
-                // Model appears to be cached - try loading directly
+            let cache = self.cache
+            try await fileOperation { try cache.prepareStorage() }
+            let valid = try await fileOperation { try cache.modelIsValid() }
+            try Task.checkCancellation()
+            if !valid {
+                try await fileOperation { try cache.removeLegacyDownloads() }
+                try await fileOperation { try cache.invalidateModel() }
+                loadingStatus = "Downloading speech model…"
+                loadingSubtitle = "\(estimatedDownloadSize). Keep the app open while downloading."
+                isDownloading = true
+                logger.info("Downloading speech model")
+                try await backend.download(model: model, root: cache.downloadRoot) { [weak self] fraction in
+                    Task { @MainActor [weak self] in
+                        guard let self, self.loadID == id, self.isDownloading,
+                              self.loadingTask?.isCancelled == false, fraction.isFinite else { return }
+                        self.downloadProgress = min(1, max(self.downloadProgress, fraction))
+                    }
+                }
+                try Task.checkCancellation()
                 isDownloading = false
-                print("✅ Model found in cache with \(cacheStatus.fileCount) files")
-
-                // Start the progress animation
-                startCacheLoadingProgress()
-
-                do {
-                    let whisper = try await WhisperKit(
-                        modelFolder: modelPath.path,
-                        verbose: false,
-                        logLevel: .error,
-                        prewarm: true,
-                        load: true,
-                        download: false
-                    )
-                    stopCacheLoadingProgress()
-                    whisperKit = whisper
-                    print("✅ Loaded model from cache successfully")
-                } catch {
-                    stopCacheLoadingProgress()
-                    // Cache might be corrupted, try downloading fresh
-                    print("⚠️ Failed to load from cache: \(error.localizedDescription)")
-                    print("📥 Will try downloading fresh copy...")
-                    try await downloadModel()
-                }
-            } else {
-                // No cache found - need to download
-                if cacheStatus.exists {
-                    loadingStatus = "Model cache incomplete, downloading..."
-                    print("⚠️ Cache exists but incomplete (\(cacheStatus.fileCount) files)")
-                } else {
-                    loadingStatus = "Model not found, downloading..."
-                    print("📥 No cached model found")
-                }
-                try await downloadModel()
+                loadingStatus = "Verifying speech files…"
+                try await fileOperation { try cache.recordDownload() }
             }
-            
-            loadingStatus = "Warming up model..."
-            
-            // Small delay to show the warming up message
-            try? await Task.sleep(nanoseconds: 300_000_000)
-            
+            try Task.checkCancellation()
+            // A broken tokenizer cache must not be accepted by Hub's metadata fast path.
+            if !cache.hasTokenizer {
+                try await fileOperation { try cache.invalidateTokenizer() }
+            }
+            initializing = true
+            loadingStatus = "Preparing speech recognition…"
+            loadingSubtitle = "First-time preparation can take a few minutes. You can cancel at any time."
+            logger.info("Prewarming speech model")
+            try await backend.prepare(folder: cache.modelFolder, tokenizerRoot: cache.downloadRoot)
+            try Task.checkCancellation()
+            try await backend.prewarm()
+            try Task.checkCancellation()
+            loadingStatus = "Loading speech recognition…"
+            loadingSubtitle = cache.hasTokenizer ? "Loading the model on your device." : "Finishing language setup. An internet connection may be needed."
+            logger.info("Loading speech model and tokenizer")
+            try await backend.load()
+            try Task.checkCancellation()
             isModelLoaded = true
-            isLoading = false
             loadingStatus = "Ready"
-            print("✅ WhisperKit model loaded and ready")
-            
+            logger.info("Speech model ready")
         } catch {
-            isLoading = false
-            isDownloading = false
-            stopCacheLoadingProgress()
-
-            // Provide user-friendly error message
-            let userMessage: String
-            if let whisperError = error as? WhisperError {
-                userMessage = whisperError.errorDescription ?? error.localizedDescription
-                canRetry = whisperError.isRetryable
+            await backend.unload()
+            isModelLoaded = false
+            if Task.isCancelled || error is CancellationError || (error as NSError).code == NSURLErrorCancelled {
+                loadingStatus = ""
+                logger.info("Speech setup canceled")
+                throw CancellationError()
+            }
+            let failure: SpeechSetupError
+            if SpeechSetupError.isStorageError(error) {
+                failure = .insufficientStorage
+            } else if SpeechSetupError.isNetworkError(error) {
+                failure = .offline
+            } else if let setupError = error as? SpeechSetupError {
+                failure = setupError
+            } else if initializing {
+                // Retain files for diagnostics, but make an explicit user retry
+                // replace both the model and its download metadata.
+                try? cache.invalidateReceipt()
+                try? cache.invalidateTokenizer()
+                failure = .initialization(error.localizedDescription)
             } else {
-                let categorized = categorizeError(error)
-                userMessage = categorized.errorDescription ?? error.localizedDescription
-                canRetry = categorized.isRetryable
+                failure = .download(error.localizedDescription)
             }
-
-            errorMessage = userMessage
-            loadingStatus = "Error: \(userMessage)"
-            print("❌ Failed to load model: \(error)")
-            throw error
-        }
-    }
-    
-    private func downloadModel() async throws {
-        var lastError: Error?
-
-        for attempt in 1...maxRetries {
-            do {
-                try await attemptDownload(attempt: attempt)
-                return // Success - exit the retry loop
-            } catch {
-                lastError = error
-                let whisperError = categorizeError(error)
-
-                if whisperError.isRetryable && attempt < maxRetries {
-                    let delay = baseRetryDelay * UInt64(attempt) // Exponential backoff
-                    let delaySecs = Double(delay) / 1_000_000_000
-                    loadingStatus = "Connection issue, retrying in \(Int(delaySecs))s... (attempt \(attempt)/\(maxRetries))"
-                    print("⚠️ Attempt \(attempt) failed: \(error.localizedDescription). Retrying in \(delaySecs)s...")
-                    try? await Task.sleep(nanoseconds: delay)
-                } else {
-                    // Not retryable or last attempt - throw the error
-                    throw whisperError
-                }
-            }
-        }
-
-        // If we get here, all retries failed
-        if let error = lastError {
-            throw categorizeError(error)
+            errorMessage = failure.localizedDescription
+            loadingStatus = failure.localizedDescription
+            logger.error("Speech setup failed: \(String(describing: error), privacy: .public)")
+            throw failure
         }
     }
 
-    private func attemptDownload(attempt: Int) async throws {
-        isDownloading = true
-        downloadProgress = 0.0
-
-        if attempt > 1 {
-            loadingStatus = "Retrying download (attempt \(attempt)/\(maxRetries))..."
-        } else {
-            loadingStatus = "Downloading speech model (~150MB)..."
+    private func fileOperation<T: Sendable>(_ operation: @escaping @Sendable () throws -> T) async throws -> T {
+        let task = Task.detached(priority: .utility, operation: operation)
+        return try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
         }
-        print("📥 Starting model download (attempt \(attempt))...")
-
-        // Start a task to show progress animation
-        let progressTask = Task { @MainActor in
-            var progress = 0.0
-            while progress < 0.90 && !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 800_000_000) // 0.8 second
-                progress += 0.03
-                self.downloadProgress = min(progress, 0.90)
-                let percent = Int(self.downloadProgress * 100)
-                if attempt > 1 {
-                    self.loadingStatus = "Downloading (attempt \(attempt))... \(percent)%"
-                } else {
-                    self.loadingStatus = "Downloading speech model... \(percent)%"
-                }
-            }
-        }
-
-        defer {
-            progressTask.cancel()
-        }
-
-        let whisper = try await WhisperKit(
-            model: modelName,
-            verbose: true,  // Enable verbose to see download progress in console
-            logLevel: .info,
-            prewarm: true,
-            load: true,
-            download: true
-        )
-
-        isDownloading = false
-        downloadProgress = 1.0
-        loadingStatus = "Download complete!"
-        whisperKit = whisper
-
-        // Verify the download
-        let newCacheStatus = checkModelCache()
-        print("✅ Model downloaded and cached: \(newCacheStatus.fileCount) files at \(newCacheStatus.path)")
     }
 
-    /// Categorize errors to determine if they're retryable and provide better messages
-    private func categorizeError(_ error: Error) -> WhisperError {
-        let description = error.localizedDescription.lowercased()
-
-        // Check for timeout errors
-        if description.contains("504") || description.contains("timeout") || description.contains("timed out") {
-            return .networkTimeout
-        }
-
-        // Check for server errors (5xx)
-        if description.contains("502") || description.contains("bad gateway") {
-            return .serverError(statusCode: 502)
-        }
-        if description.contains("503") || description.contains("service unavailable") {
-            return .serverError(statusCode: 503)
-        }
-        if description.contains("500") || description.contains("internal server error") {
-            return .serverError(statusCode: 500)
-        }
-
-        // For other errors, wrap them
-        return .downloadFailed(underlying: error)
-    }
-
-    /// Reset error state and allow retry
-    func resetForRetry() {
-        errorMessage = nil
-        canRetry = false
-        loadingStatus = ""
-        downloadProgress = 0.0
-        isDownloading = false
-    }
-    
     func transcribe(_ audioData: Data) async throws -> String? {
-        guard let whisper = whisperKit else {
-            throw WhisperError.modelNotLoaded
-        }
+        try Task.checkCancellation()
+        guard isModelLoaded else { throw SpeechSetupError.modelNotLoaded }
+        // Cancellation of a Swift task does not guarantee Core ML has stopped.
+        // Drop a chunk while inference is busy instead of allocating another run.
+        guard !isTranscribing else { return nil }
+        isTranscribing = true
+        defer { isTranscribing = false }
         
         // Convert Data to Float32 array
         let floatArray = audioData.withUnsafeBytes { bytes -> [Float] in
@@ -363,7 +242,6 @@ class WhisperService: ObservableObject {
             return nil
         }
         
-        print("🎤 Processing audio (RMS: \(String(format: "%.4f", rms)))")
         
         // Transcribe with WhisperKit
         let decodeOptions = DecodingOptions(
@@ -378,7 +256,7 @@ class WhisperService: ObservableObject {
             noSpeechThreshold: 0.6
         )
         
-        let results = try await whisper.transcribe(
+        let results = try await backend.transcribe(
             audioArray: floatArray,
             decodeOptions: decodeOptions
         )
@@ -404,43 +282,6 @@ class WhisperService: ObservableObject {
             return nil
         }
         
-        print("🎙️ Transcribed: '\(cleanedText)'")
         return cleanedText
-    }
-}
-
-enum WhisperError: Error, LocalizedError {
-    case modelNotLoaded
-    case transcriptionFailed
-    case networkTimeout
-    case serverError(statusCode: Int)
-    case downloadFailed(underlying: Error)
-
-    var errorDescription: String? {
-        switch self {
-        case .modelNotLoaded:
-            return "Speech model not loaded"
-        case .transcriptionFailed:
-            return "Transcription failed"
-        case .networkTimeout:
-            return "Network timeout - please check your connection and try again"
-        case .serverError(let code):
-            return "Server error (\(code)) - this is usually temporary, please try again"
-        case .downloadFailed(let error):
-            return "Download failed: \(error.localizedDescription)"
-        }
-    }
-
-    var isRetryable: Bool {
-        switch self {
-        case .networkTimeout, .serverError:
-            return true
-        case .downloadFailed(let error):
-            // Check if underlying error suggests retry
-            let desc = error.localizedDescription.lowercased()
-            return desc.contains("timeout") || desc.contains("504") || desc.contains("502") || desc.contains("503")
-        default:
-            return false
-        }
     }
 }

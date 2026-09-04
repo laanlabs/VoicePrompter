@@ -14,7 +14,7 @@ Build a native iOS teleprompter app that automatically scrolls text in sync with
 - **Language:** Swift 5.9+
 - **UI Framework:** SwiftUI
 - **Architecture:** MVVM with async/await
-- **Speech Recognition:** WhisperKit (`small-en` model, ~250MB)
+- **Speech Recognition:** WhisperKit (device-appropriate `base.en` or `tiny.en` model, ~150–160 MB)
 - **Persistence:** SwiftData
 - **Script Format:** Markdown only
 
@@ -208,15 +208,15 @@ Handles microphone input via AVAudioEngine.
 Wrapper for WhisperKit integration.
 
 **Responsibilities:**
-- Download and load `small-en` model on first use
-- Show download progress to user (~250MB)
+- Select, download, verify, and load a device-appropriate English model on first use
+- Show real download progress to the user (~150–160 MB)
 - Cache model locally after download
 - Transcribe audio buffers to text
 - Handle model loading errors gracefully
 
 **Model Details:**
-- Model: `openai_whisper-small.en`
-- Size: ~250MB
+- Model: `openai_whisper-base.en` or `openai_whisper-tiny.en`
+- Size: ~150–160 MB
 - Language: English only
 - Processing: Fully on-device, no internet required after download
 
@@ -370,7 +370,7 @@ When VoiceTrack identifies a word position in the plain text, the app must map t
 
 ## Notes for Implementation
 
-1. **Model Download:** The Whisper `small-en` model is ~250MB. Download on first launch with progress UI. Cache locally so subsequent launches are instant.
+1. **Model Download:** Download the device-appropriate English model (~150–160 MB) on first VoiceTrack use with progress UI. Verify and cache it locally so subsequent launches can reuse it.
 
 2. **Audio Pipeline:** Use a circular buffer or sliding window approach for audio. Process chunks of ~1-3 seconds for best latency/accuracy tradeoff.
 

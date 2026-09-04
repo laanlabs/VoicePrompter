@@ -78,7 +78,7 @@ VoicePrompter is a professional teleprompter application for iOS that revolution
 
 ### First Launch
 
-On first launch, the app will download the WhisperKit `small-en` model (~250MB). This is a one-time download that gets cached locally for future use.
+On first use of VoiceTrack, the app downloads a device-appropriate English Whisper model (approximately 150–160 MB). The model is verified and cached locally for future use.
 
 **Note:** Make sure you have a stable internet connection for the initial model download.
 
@@ -141,7 +141,7 @@ The core coordinator that orchestrates audio capture, speech recognition, and te
 Handles real-time microphone input using AVAudioEngine, resampling to 16kHz mono for Whisper, and calculating RMS levels for the mic meter.
 
 #### WhisperService
-Wrapper around WhisperKit that manages model loading, downloading, and transcription. Uses the `small-en` model for English speech recognition.
+Wrapper around WhisperKit that manages model selection, verified downloads, loading, cancellation, and transcription. It uses `base.en` normally and `tiny.en` on constrained devices.
 
 #### TextMatcher
 Implements a fuzzy matching algorithm to locate the current spoken position in the script, handling transcription errors and variations.
@@ -153,7 +153,8 @@ Processes Markdown content for both rendering (with formatting) and plain text e
 
 - **WhisperKit** - On-device Whisper speech recognition
   - Repository: `https://github.com/argmaxinc/WhisperKit.git`
-  - Model: `openai_whisper-small.en` (~250MB)
+  - Models: `openai_whisper-base.en` or `openai_whisper-tiny.en` (~150–160 MB)
+  - Revision: pinned to the tested commit in the Xcode project and `Package.resolved`
 
 ### System Frameworks
 
@@ -213,4 +214,3 @@ If you encounter any issues or have questions, please [open an issue](https://gi
 ---
 
 Made with ❤️ for content creators, speakers, and performers
-

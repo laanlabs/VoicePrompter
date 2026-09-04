@@ -37,20 +37,27 @@ class VoiceTrackEngine: ObservableObject {
     @Published var currentInputSource: AudioInputSource?
     @Published var availableInputSources: [AudioInputSource] = []
 
-    private let audioCapture = AudioCaptureService()
-    let whisperService = WhisperService()  // Exposed to allow observing loading status
+    private let audioCapture: any AudioCapturing
+    let whisperService: WhisperService
     private let textMatcher = TextMatcher()
     
     private var audioBuffer: Data = Data()
     private var transcriptionTask: Task<Void, Never>?
     private var isRunning = false
+    private var startupTask: Task<Void, Error>?
     
     private let bufferDuration: TimeInterval = 1.5 // Process 1.5-second chunks for faster response
     private let sampleRate: Double = 16000.0
     private let bytesPerSample = MemoryLayout<Float32>.size
     private let maxLogEntries = 20
     
-    init() {
+    convenience init() {
+        self.init(whisperService: .shared, audioCapture: AudioCaptureService())
+    }
+
+    init(whisperService: WhisperService, audioCapture: any AudioCapturing) {
+        self.whisperService = whisperService
+        self.audioCapture = audioCapture
         audioCapture.onAudioBuffer = { [weak self] data in
             Task { @MainActor [weak self] in
                 await self?.handleAudioBuffer(data)
@@ -98,33 +105,56 @@ class VoiceTrackEngine: ObservableObject {
     }
 
     func start() async throws {
-        guard !isRunning else { return }
-
-        // Load Whisper model if needed
-        if !whisperService.isModelLoaded {
-            state = .loadingModel
-            try await whisperService.loadModel()
-            isModelReady = true
+        try Task.checkCancellation()
+        if let previous = startupTask, previous.isCancelled {
+            _ = await previous.result
+            try Task.checkCancellation()
         }
-
-        // Start audio capture
-        try audioCapture.start()
-
-        // Refresh input sources after audio session is active
-        refreshInputSources()
-
-        isRunning = true
-        state = .listening
-        audioBuffer = Data()
+        guard !isRunning else { return }
+        let task: Task<Void, Error>
+        if let existing = startupTask {
+            task = existing
+        } else {
+            state = .loadingModel
+            task = Task {
+                defer { self.startupTask = nil }
+                do {
+                    try await self.audioCapture.requestPermission()
+                    try Task.checkCancellation()
+                    try await self.whisperService.loadModel()
+                    try Task.checkCancellation()
+                    self.isModelReady = true
+                    try self.audioCapture.start()
+                    self.refreshInputSources()
+                    self.isRunning = true
+                    self.state = .listening
+                    self.audioBuffer = Data()
+                } catch {
+                    self.audioCapture.stop()
+                    self.isRunning = false
+                    self.state = Task.isCancelled || error is CancellationError ? .idle : .error(error.localizedDescription)
+                    throw error
+                }
+            }
+            startupTask = task
+        }
+        try await withTaskCancellationHandler {
+            try await task.value
+            try Task.checkCancellation()
+        } onCancel: {
+            task.cancel()
+        }
     }
     
     func stop() {
-        guard isRunning else { return }
-        
+        startupTask?.cancel()
+        whisperService.cancelLoading()
         isRunning = false
         transcriptionTask?.cancel()
         transcriptionTask = nil
         audioCapture.stop()
+        audioBuffer = Data()
+        micLevel = 0
         state = .idle
     }
     
@@ -243,4 +273,3 @@ class VoiceTrackEngine: ObservableObject {
         return textMatcher.getScriptWords()
     }
 }
-

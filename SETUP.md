@@ -11,7 +11,7 @@ The app requires the WhisperKit Swift Package. To add it:
 5. Click the "+" button
 6. Enter the package URL: `https://github.com/argmaxinc/WhisperKit.git`
 7. Click "Add Package"
-8. Select the latest version and click "Add Package" again
+8. Select the tested revision recorded in `Package.resolved` and click "Add Package" again
 
 Alternatively, you can add it via the menu:
 - File → Add Package Dependencies...
@@ -34,10 +34,11 @@ The following has been configured:
 
 ## First Launch
 
-On first launch, the app will:
-1. Download the Whisper `small-en` model (~250MB)
-2. Show download progress
-3. Cache the model locally for future use
+On first use of VoiceTrack, the app will:
+1. Request microphone permission
+2. Download the device-appropriate English Whisper model (~150–160 MB)
+3. Verify and prepare the model
+4. Cache it locally for future use
 
 ## Features Implemented
 
@@ -66,4 +67,3 @@ On first launch, the app will:
 - The WhisperKit API may vary by version. If you encounter compilation errors, check the WhisperKit documentation for the current API.
 - The app requires microphone permission on first use.
 - Model download requires internet connection on first launch.
-

@@ -8,6 +8,30 @@
 import AVFoundation
 import Accelerate
 
+nonisolated private final class SingleBufferConverterInput: @unchecked Sendable {
+    private let buffer: AVAudioPCMBuffer
+    private let lock = NSLock()
+    private var wasSupplied = false
+
+    init(buffer: AVAudioPCMBuffer) {
+        self.buffer = buffer
+    }
+
+    func next(status: UnsafeMutablePointer<AVAudioConverterInputStatus>) -> AVAudioBuffer? {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard !wasSupplied else {
+            status.pointee = .noDataNow
+            return nil
+        }
+
+        wasSupplied = true
+        status.pointee = .haveData
+        return buffer
+    }
+}
+
 struct AudioInputSource: Identifiable, Equatable {
     let id: String
     let name: String
@@ -35,13 +59,30 @@ struct AudioInputSource: Identifiable, Equatable {
     }
 }
 
-class AudioCaptureService: NSObject {
+@MainActor
+protocol AudioCapturing: AnyObject {
+    var onAudioBuffer: (@Sendable (Data) -> Void)? { get set }
+    var onMicLevel: (@Sendable (Float) -> Void)? { get set }
+    var micBoost: Float { get set }
+    var voiceIsolation: Bool { get set }
+    func requestPermission() async throws
+    func start() throws
+    func stop()
+    func getAvailableInputs() -> [AudioInputSource]
+    func getCurrentInput() -> AudioInputSource?
+    func setInput(_ source: AudioInputSource) throws
+}
+
+@MainActor
+final class AudioCaptureService: NSObject, AudioCapturing {
     private var audioEngine: AVAudioEngine?
     private var inputNode: AVAudioInputNode?
     private var isCapturing = false
+    private var hasInstalledTap = false
+    private var sessionIsActive = false
 
-    var onAudioBuffer: ((Data) -> Void)?
-    var onMicLevel: ((Float) -> Void)?
+    var onAudioBuffer: (@Sendable (Data) -> Void)?
+    var onMicLevel: (@Sendable (Float) -> Void)?
 
     // Audio enhancement settings
     var micBoost: Float = 1.0  // Gain multiplier (1.0 to 4.0)
@@ -84,71 +125,69 @@ class AudioCaptureService: NSObject {
         try session.setPreferredInput(port)
     }
 
+    func requestPermission() async throws {
+        let granted = await AVAudioApplication.requestRecordPermission()
+        try Task.checkCancellation()
+        guard granted else { throw AudioCaptureError.microphoneDenied }
+    }
+
     func start() throws {
         guard !isCapturing else { return }
-
-        // Request microphone permission
         let session = AVAudioSession.sharedInstance()
+        do {
+            let mode: AVAudioSession.Mode = voiceIsolation ? .voiceChat : .measurement
+            try session.setCategory(.playAndRecord, mode: mode, options: [.defaultToSpeaker, .allowBluetoothHFP])
+            try session.setActive(true)
+            sessionIsActive = true
+            guard session.isInputAvailable else { throw AudioCaptureError.inputNotFound }
 
-        // Use voiceChat mode for voice isolation (includes noise reduction)
-        // or measurement mode for raw audio
-        let audioMode: AVAudioSession.Mode = voiceIsolation ? .voiceChat : .measurement
-        try session.setCategory(.playAndRecord, mode: audioMode, options: [.defaultToSpeaker, .allowBluetooth])
-        try session.setActive(true)
-
-        // Enable voice isolation on iOS 17+ if available
-        if voiceIsolation {
-            if #available(iOS 17.0, *) {
-                try? session.setPrefersNoInterruptionsFromSystemAlerts(true)
+            let engine = AVAudioEngine()
+            audioEngine = engine
+            let input = engine.inputNode
+            inputNode = input
+            let inputFormat = input.outputFormat(forBus: 0)
+            guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0,
+                  let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                      sampleRate: 16000, channels: 1, interleaved: false) else {
+                throw AudioCaptureError.formatCreationFailed
             }
+
+            // The tap runs on an audio thread. Capture values instead of calling
+            // main-actor methods or reading mutable UI settings from that thread.
+            let gain = micBoost
+            let audioCallback = onAudioBuffer
+            let levelCallback = onMicLevel
+            input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { buffer, _ in
+                Self.processBuffer(buffer, targetFormat: targetFormat, gain: gain,
+                                   onAudio: audioCallback, onLevel: levelCallback)
+            }
+            hasInstalledTap = true
+            try engine.start()
+            isCapturing = true
+        } catch {
+            stop()
+            throw error
         }
-        
-        audioEngine = AVAudioEngine()
-        guard let engine = audioEngine else {
-            throw AudioCaptureError.engineCreationFailed
-        }
-        
-        inputNode = engine.inputNode
-        guard let input = inputNode else {
-            throw AudioCaptureError.inputNodeNotFound
-        }
-        
-        // Configure for 16kHz mono
-        let inputFormat = input.inputFormat(forBus: 0)
-        let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false)
-        
-        guard let format = targetFormat else {
-            throw AudioCaptureError.formatCreationFailed
-        }
-        
-        // Install tap
-        let bufferSize: AVAudioFrameCount = 16000 // ~1 second at 16kHz
-        
-        input.installTap(onBus: 0, bufferSize: bufferSize, format: inputFormat) { [weak self] buffer, _ in
-            self?.processBuffer(buffer, targetFormat: format)
-        }
-        
-        try engine.start()
-        isCapturing = true
     }
-    
-    private func processBuffer(_ buffer: AVAudioPCMBuffer, targetFormat: AVAudioFormat) {
+
+    nonisolated private static func processBuffer(_ buffer: AVAudioPCMBuffer, targetFormat: AVAudioFormat,
+        gain: Float, onAudio: (@Sendable (Data) -> Void)?, onLevel: (@Sendable (Float) -> Void)?) {
         // If formats match, use buffer directly
         if buffer.format.isEqual(targetFormat) {
-            processConvertedBuffer(buffer)
+            processConvertedBuffer(buffer, gain: gain, onAudio: onAudio, onLevel: onLevel)
             return
         }
         
         // Convert to target format
         guard let converter = AVAudioConverter(from: buffer.format, to: targetFormat),
-              let convertedBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: buffer.frameLength) else {
+              let convertedBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: AVAudioFrameCount(ceil(Double(buffer.frameLength) * targetFormat.sampleRate / buffer.format.sampleRate)) + 1) else {
             return
         }
         
         var error: NSError?
+        let inputProvider = SingleBufferConverterInput(buffer: buffer)
         let inputBlock: AVAudioConverterInputBlock = { _, outStatus in
-            outStatus.pointee = .haveData
-            return buffer
+            inputProvider.next(status: outStatus)
         }
         
         converter.convert(to: convertedBuffer, error: &error, withInputFrom: inputBlock)
@@ -157,10 +196,11 @@ class AudioCaptureService: NSObject {
             return
         }
         
-        processConvertedBuffer(convertedBuffer)
+        processConvertedBuffer(convertedBuffer, gain: gain, onAudio: onAudio, onLevel: onLevel)
     }
     
-    private func processConvertedBuffer(_ buffer: AVAudioPCMBuffer) {
+    nonisolated private static func processConvertedBuffer(_ buffer: AVAudioPCMBuffer,
+        gain: Float, onAudio: (@Sendable (Data) -> Void)?, onLevel: (@Sendable (Float) -> Void)?) {
         guard let floatChannelData = buffer.floatChannelData else {
             return
         }
@@ -172,9 +212,9 @@ class AudioCaptureService: NSObject {
 
         // Apply mic boost (gain) if greater than 1.0
         var processedData: [Float]
-        if micBoost > 1.0 {
+        if gain > 1.0 {
             // Apply gain using vDSP for efficiency
-            var gain = micBoost
+            var gain = gain
             processedData = [Float](repeating: 0, count: frameLength)
             vDSP_vsmul(channelData, 1, &gain, &processedData, 1, vDSP_Length(frameLength))
 
@@ -193,36 +233,40 @@ class AudioCaptureService: NSObject {
         }
         let level = min(1.0, max(0.0, rms * 10.0)) // Scale for visibility
 
-        DispatchQueue.main.async {
-            self.onMicLevel?(level)
-        }
+        onLevel?(level)
 
         // Convert to Data for Whisper
         let data = processedData.withUnsafeBytes { Data($0) }
-        onAudioBuffer?(data)
+        onAudio?(data)
     }
     
     func stop() {
-        guard isCapturing else { return }
-        
-        inputNode?.removeTap(onBus: 0)
+        if hasInstalledTap { inputNode?.removeTap(onBus: 0) }
+        hasInstalledTap = false
         audioEngine?.stop()
         audioEngine = nil
         inputNode = nil
         isCapturing = false
-        
-        try? AVAudioSession.sharedInstance().setActive(false)
-    }
-    
-    deinit {
-        stop()
+        if sessionIsActive {
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            sessionIsActive = false
+        }
     }
 }
 
-enum AudioCaptureError: Error {
-    case engineCreationFailed
-    case inputNodeNotFound
+nonisolated enum AudioCaptureError: LocalizedError {
+    case microphoneDenied
     case formatCreationFailed
     case inputNotFound
-}
 
+    var errorDescription: String? {
+        switch self {
+        case .microphoneDenied:
+            return "Microphone access is off. Enable it for VoicePrompter in Settings, then try again."
+        case .formatCreationFailed:
+            return "The microphone is unavailable. Reconnect your microphone or headset, then try again."
+        case .inputNotFound:
+            return "No microphone is available. Connect a microphone or disconnect your headset, then try again."
+        }
+    }
+}

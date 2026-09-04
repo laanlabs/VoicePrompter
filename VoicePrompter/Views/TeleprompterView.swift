@@ -20,14 +20,18 @@ struct TeleprompterView: View {
     @State private var elapsedTime: TimeInterval = 0
     @State private var timer: Timer?
     @State private var showDebugPanel = false
-    @State private var loadingStatusText = ""
-    @State private var loadingSubtitleText = ""
-    @State private var downloadProgress: Double = 0.0
-    @State private var isDownloading: Bool = false
-    @State private var isLoadingFromCache: Bool = false
     @State private var showDownloadConfirmation = false
-    @State private var showErrorState = false
-    @State private var canRetryDownload = false
+    @State private var startupTask: Task<Void, Never>?
+    @State private var startupID: UUID?
+
+    private var setupError: String? {
+        if case .error(let message) = voiceTrack.state { return message }
+        return nil
+    }
+
+    private var showsSetup: Bool {
+        voiceTrack.state == .loadingModel || setupError != nil
+    }
 
     private var scriptWords: [String] {
         MarkdownParser.tokenize(MarkdownParser.extractPlainText(from: script.content))
@@ -300,46 +304,18 @@ struct TeleprompterView: View {
                     }
                 }
                 
-                // Loading overlay
-                if case .loadingModel = voiceTrack.state {
+                if showsSetup {
                     LoadingOverlayView(
-                        status: loadingStatusText,
-                        subtitle: loadingSubtitleText,
-                        progress: downloadProgress,
-                        isDownloading: isDownloading,
-                        isLoadingFromCache: isLoadingFromCache,
-                        showError: showErrorState,
-                        canRetry: canRetryDownload,
-                        onRetry: {
-                            retryDownload()
-                        }
+                        service: voiceTrack.whisperService,
+                        error: setupError,
+                        onRetry: { beginVoiceTrack() },
+                        onCancel: { stopVoiceTrack() }
                     )
                 }
             }
         }
         .onAppear {
             voiceTrack.loadScript(content: script.content, trackingMode: settings.trackingMode)
-        }
-        .onReceive(voiceTrack.whisperService.$loadingStatus) { status in
-            loadingStatusText = status
-        }
-        .onReceive(voiceTrack.whisperService.$loadingSubtitle) { subtitle in
-            loadingSubtitleText = subtitle
-        }
-        .onReceive(voiceTrack.whisperService.$downloadProgress) { progress in
-            downloadProgress = progress
-        }
-        .onReceive(voiceTrack.whisperService.$isDownloading) { downloading in
-            isDownloading = downloading
-        }
-        .onReceive(voiceTrack.whisperService.$isLoadingFromCache) { loading in
-            isLoadingFromCache = loading
-        }
-        .onReceive(voiceTrack.whisperService.$errorMessage) { error in
-            showErrorState = error != nil
-        }
-        .onReceive(voiceTrack.whisperService.$canRetry) { retry in
-            canRetryDownload = retry
         }
         .onDisappear {
             stopVoiceTrack()
@@ -353,7 +329,7 @@ struct TeleprompterView: View {
             }
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("VoiceTrack requires a one-time download of the speech recognition model (\(WhisperService.estimatedDownloadSize)). This enables automatic script scrolling based on your voice.\n\nThe download will only happen once and requires an internet connection.")
+            Text("VoiceTrack needs speech recognition files for this device (\(voiceTrack.whisperService.estimatedDownloadSize)). This enables automatic script scrolling based on your voice.\n\nSetup requires an internet connection. After setup, speech recognition works offline.")
         }
     }
     
@@ -367,51 +343,49 @@ struct TeleprompterView: View {
     }
 
     private func beginVoiceTrack() {
-        Task {
+        guard startupTask == nil else { return }
+        let id = UUID()
+        startupID = id
+        startupTask = Task {
+            defer {
+                if startupID == id { startupTask = nil; startupID = nil }
+            }
             do {
-                showErrorState = false
-                canRetryDownload = false
+                voiceTrack.configureAudio(micBoost: Float(settings.micBoost), voiceIsolation: settings.voiceIsolation)
+                try await voiceTrack.start()
+                try Task.checkCancellation()
+                guard startupID == id else { return }
+                isVoiceTrackActive = true
                 startTime = Date()
                 elapsedTime = 0
                 startTimer()
-
-                // Configure audio settings before starting
-                voiceTrack.configureAudio(
-                    micBoost: Float(settings.micBoost),
-                    voiceIsolation: settings.voiceIsolation
-                )
-
-                try await voiceTrack.start()
-                isVoiceTrackActive = true
             } catch {
-                print("Failed to start VoiceTrack: \(error)")
-                // Error state will be set by onReceive handlers
+                // The engine publishes startup errors, including microphone failures.
+                guard startupID == id else { return }
+                isVoiceTrackActive = false
+                timer?.invalidate()
+                timer = nil
             }
         }
     }
 
-    private func retryDownload() {
-        voiceTrack.whisperService.resetForRetry()
-        showErrorState = false
-        canRetryDownload = false
-        beginVoiceTrack()
-    }
-    
     private func stopVoiceTrack() {
+        startupTask?.cancel()
+        startupTask = nil
+        startupID = nil
         voiceTrack.stop()
         isVoiceTrackActive = false
         timer?.invalidate()
         timer = nil
     }
-    
+
     private func startTimer() {
+        timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
-            if let start = startTime {
-                elapsedTime = Date().timeIntervalSince(start)
-            }
+            if let start = startTime { elapsedTime = Date().timeIntervalSince(start) }
         }
     }
-    
+
     private func formatTime(_ time: TimeInterval) -> String {
         let minutes = Int(time) / 60
         let seconds = Int(time) % 60
@@ -479,208 +453,57 @@ struct VoiceTrackStatusView: View {
     }
 }
 
-// Loading overlay with actual status and progress bar from WhisperService
+// Download percentages come from the downloader. Core ML preparation has no
+// reliable percentage, so it uses an indeterminate indicator and a cancel button.
 struct LoadingOverlayView: View {
-    let status: String
-    let subtitle: String
-    let progress: Double
-    let isDownloading: Bool
-    let isLoadingFromCache: Bool
-    let showError: Bool
-    let canRetry: Bool
+    @ObservedObject var service: WhisperService
+    let error: String?
     let onRetry: () -> Void
-
-    @State private var dots = ""
-    @State private var isPulsing = false
-
-    private var title: String {
-        if showError {
-            return "Download Failed"
-        } else if isDownloading {
-            return "Downloading Model"
-        } else if isLoadingFromCache {
-            return "Loading Model"
-        } else if status.lowercased().contains("check") {
-            return "Checking for Model"
-        } else if status.lowercased().contains("warm") {
-            return "Preparing Model"
-        } else if status.lowercased().contains("retry") {
-            return "Retrying Download"
-        } else {
-            return "Loading Speech Model"
-        }
-    }
-
-    private var displaySubtitle: String {
-        if showError && canRetry {
-            return "This is usually a temporary server issue"
-        } else if !subtitle.isEmpty {
-            return subtitle
-        } else if isDownloading {
-            return "First-time setup (~150MB)"
-        } else {
-            return ""
-        }
-    }
-
-    /// Show progress ring for downloads or cache loading
-    private var showProgressRing: Bool {
-        (isDownloading || isLoadingFromCache) && !showError
-    }
-
-    /// Progress ring color - blue for cache, green for download
-    private var progressColor: Color {
-        isLoadingFromCache ? .blue : .green
-    }
-
-    /// Whether we're in the "waiting" phase (progress >= 70% for cache loading)
-    private var isWaitingPhase: Bool {
-        isLoadingFromCache && progress >= 0.70 && !showError
-    }
+    let onCancel: () -> Void
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.85)
-                .ignoresSafeArea()
-
+            Color.black.opacity(0.9).ignoresSafeArea()
             VStack(spacing: 20) {
-                // Error state indicator
-                if showError {
+                if let error {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 50))
-                        .foregroundColor(.orange)
-                }
-                // Animated spinner or progress indicator
-                else if showProgressRing {
-                    // Show progress ring when downloading or loading from cache
-                    ZStack {
-                        // Pulsing glow when in waiting phase to show activity
-                        if isWaitingPhase {
-                            Circle()
-                                .fill(progressColor.opacity(0.3))
-                                .frame(width: 100, height: 100)
-                                .scaleEffect(isPulsing ? 1.2 : 1.0)
-                                .opacity(isPulsing ? 0.0 : 0.5)
-                                .animation(.easeInOut(duration: 1.5).repeatForever(autoreverses: false), value: isPulsing)
-                        }
-
-                        Circle()
-                            .stroke(Color.white.opacity(0.2), lineWidth: 8)
-                            .frame(width: 80, height: 80)
-
-                        Circle()
-                            .trim(from: 0, to: progress)
-                            .stroke(progressColor, style: StrokeStyle(lineWidth: 8, lineCap: .round))
-                            .frame(width: 80, height: 80)
-                            .rotationEffect(.degrees(-90))
-                            .animation(.easeInOut(duration: 0.3), value: progress)
-
-                        // Show working indicator instead of percentage when in waiting phase
-                        if isWaitingPhase {
-                            Image(systemName: "waveform")
-                                .font(.title2)
-                                .foregroundColor(.white)
-                                .symbolEffect(.variableColor.iterative, options: .repeating)
-                        } else {
-                            Text("\(Int(progress * 100))%")
-                                .font(.headline.bold())
-                                .foregroundColor(.white)
-                        }
-                    }
-                    .onAppear {
-                        isPulsing = true
-                    }
-                } else {
-                    // Animated spinner for checking/loading
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                        .scaleEffect(2.5)
-                }
-
-                Text(title)
-                    .font(.title2.bold())
-                    .foregroundColor(showError ? .orange : .white)
-
-                // Actual status message from WhisperService
-                Text(status.isEmpty ? "Initializing\(dots)" : status)
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.8))
-                    .multilineTextAlignment(.center)
-                    .frame(minHeight: 20)
-                    .padding(.horizontal)
-
-                // Subtitle info
-                if !displaySubtitle.isEmpty {
-                    Text(displaySubtitle)
-                        .font(.caption)
-                        .foregroundColor(showError ? .white.opacity(0.6) : .white.opacity(0.6))
+                        .font(.system(size: 44))
+                        .foregroundStyle(.orange)
+                    Text("Couldn’t Start VoiceTrack")
+                        .font(.title2.bold())
+                    Text(error)
+                        .font(.subheadline)
                         .multilineTextAlignment(.center)
-                }
-
-                // Retry button when error occurs
-                if showError && canRetry {
-                    Button(action: onRetry) {
-                        HStack {
-                            Image(systemName: "arrow.clockwise")
-                            Text("Try Again")
-                        }
-                        .font(.headline)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 12)
-                        .background(Color.blue)
-                        .cornerRadius(10)
+                    Button("Try Again", action: onRetry)
+                        .buttonStyle(.borderedProminent)
+                } else {
+                    if service.isDownloading {
+                        ProgressView(value: service.downloadProgress)
+                            .tint(.green)
+                        Text("\(Int(service.downloadProgress * 100))%")
+                            .monospacedDigit()
+                    } else {
+                        ProgressView().tint(.white).scaleEffect(1.5)
+                            .padding(.vertical, 10)
                     }
-                    .padding(.top, 8)
-                }
-
-                // Progress bar for download only
-                if isDownloading && !showError {
-                    VStack(spacing: 8) {
-                        GeometryReader { geometry in
-                            ZStack(alignment: .leading) {
-                                RoundedRectangle(cornerRadius: 4)
-                                    .fill(Color.white.opacity(0.2))
-
-                                RoundedRectangle(cornerRadius: 4)
-                                    .fill(Color.green)
-                                    .frame(width: geometry.size.width * progress)
-                                    .animation(.easeInOut(duration: 0.3), value: progress)
-                            }
-                        }
-                        .frame(height: 8)
-                        .padding(.horizontal, 20)
-
-                        Text("~150MB (one-time download)")
-                            .font(.caption)
-                            .foregroundColor(.white.opacity(0.5))
-                    }
-                } else if isLoadingFromCache && !showError {
-                    VStack(spacing: 4) {
-                        Text("No download needed — using cached model")
-                            .font(.caption)
-                            .foregroundColor(.green.opacity(0.7))
-                        if isWaitingPhase {
-                            Text("Older devices may take longer to initialize")
-                                .font(.caption2)
-                                .foregroundColor(.white.opacity(0.5))
-                        }
+                    Text(service.isLoading ? service.loadingStatus : "Starting microphone…")
+                        .font(.title3.bold())
+                        .multilineTextAlignment(.center)
+                    if service.isLoading && !service.loadingSubtitle.isEmpty {
+                        Text(service.loadingSubtitle)
+                            .font(.subheadline)
+                            .foregroundStyle(.white.opacity(0.7))
+                            .multilineTextAlignment(.center)
                     }
                 }
+                Button(error == nil ? "Cancel" : "Close", action: onCancel)
+                    .buttonStyle(.bordered)
             }
-            .padding(40)
-            .background(Color.gray.opacity(0.2))
-            .cornerRadius(20)
-        }
-        .onAppear {
-            startDotsAnimation()
-        }
-    }
-
-    private func startDotsAnimation() {
-        // Animate dots for visual feedback
-        Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { timer in
-            dots = String(repeating: ".", count: (dots.count + 1) % 4)
+            .foregroundStyle(.white)
+            .padding(28)
+            .frame(maxWidth: 420)
+            .background(Color.gray.opacity(0.2), in: RoundedRectangle(cornerRadius: 20))
+            .padding(20)
         }
     }
 }
